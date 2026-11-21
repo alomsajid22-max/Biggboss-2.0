@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>BIGG BOSS – THE HOUSE</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <div id="app-root">
+    <canvas id="game-canvas" aria-label="BIGG BOSS 3D Reality Show House"></canvas>
+
+    <!-- HUD Overlay -->
+    <div id="hud" class="hud hidden">
+      <!-- Top Bar -->
+      <header class="hud-top">
+        <div class="room-pill" id="room-pill">
+          <span class="room-dot"></span>
+          <div class="room-meta">
+            <span class="room-eyebrow" id="active-player-tag">PLAYER 01 • ARIA</span>
+            <span class="room-name" id="room-name">Central Living Atrium</span>
+          </div>
+        </div>
+
+        <div class="hud-actions">
+          <button type="button" class="pill-btn live-pill" id="btn-players" aria-label="View online players and multiplayer menu">
+            <span class="btn-icon">👥</span>
+            <span class="btn-label" id="online-count-label">1/15</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-lobby" aria-label="Return to multiplayer lobby">
+            <span class="btn-icon">🚪</span>
+            <span class="btn-label">Lobby</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-cast" aria-label="Choose housemate character">
+            <span class="btn-icon">🎭</span>
+            <span class="btn-label">Avatar</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-wardrobe" aria-label="Open Wardrobe Customization">
+            <span class="btn-icon">👗</span>
+            <span class="btn-label">Outfit</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-chat" aria-label="Open House Chat and Messages">
+            <span class="btn-icon">💬</span>
+            <span class="btn-label">Chat</span>
+            <span class="unread-dot hidden" id="chat-unread-dot"></span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-profile" aria-label="Open Player Profile, Badges & Leaderboard">
+            <span class="btn-icon">👤</span>
+            <span class="btn-label">Stats</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-house-hub" aria-label="Open Tasks, Teams, Rules & Daily Schedule">
+            <span class="btn-icon">📋</span>
+            <span class="btn-label">Tasks</span>
+          </button>
+          <button type="button" class="pill-btn kitchen-pill" id="btn-kitchen" aria-label="Open Kitchen, Rations & Cooking Studio">
+            <span class="btn-icon">🍳</span>
+            <span class="btn-label">Kitchen</span>
+          </button>
+          <button type="button" class="pill-btn admin-pill hidden" id="btn-admin-phone" aria-label="Open Main Admin Personal Phone">
+            <span class="btn-icon">📱</span>
+            <span class="btn-label">Phone</span>
+          </button>
+          <button type="button" class="pill-btn admin-pill hidden" id="btn-admin-dash" aria-label="Open Admin Control">
+            <span class="btn-icon">🛡️</span>
+            <span class="btn-label">Admin Control</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-time" aria-label="Toggle day or night lighting">
+            <span class="btn-icon" id="time-icon">☀️</span>
+            <span class="btn-label" id="time-label">Day</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-map" aria-label="Open house floorplan">
+            <span class="btn-icon">🗺️</span>
+            <span class="btn-label">Map</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-quality" aria-label="Toggle graphics quality">
+            <span class="btn-icon">⚡</span>
+            <span class="btn-label" id="quality-label">High</span>
+          </button>
+          <button type="button" class="pill-btn" id="btn-cam-mode" aria-label="Switch camera view mode">
+            <span class="btn-icon">📷</span>
+            <span class="btn-label" id="cam-mode-label">3P</span>
+          </button>
+          <button type="button" class="pill-btn icon-only" id="btn-zoom-out" aria-label="Zoom camera out">
+            <span class="btn-icon">➖</span>
+          </button>
+          <button type="button" class="pill-btn icon-only" id="btn-zoom-in" aria-label="Zoom camera in">
+            <span class="btn-icon">➕</span>
+          </button>
+          <button type="button" class="pill-btn icon-only" id="btn-cam-reset" aria-label="Reset camera">
+            <span class="btn-icon">🎥</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Phase 7 Kitchen Energy & Hunger Status + Phase 14/17 Clock & Weather Bar -->
+      <div class="kitchen-status-bar">
+        <button type="button" class="kitchen-status-pill" id="kitchen-status-pill" aria-label="Open Kitchen Pantry and Meals">
+          <span class="k-stat" id="hud-energy-val">⚡ 75%</span>
+          <span class="k-sep">•</span>
+          <span class="k-stat" id="hud-hunger-val">🍽️ 30%</span>
+          <span class="k-meal-badge hidden" id="hud-meals-badge">🍲 0 Ready</span>
+        </button>
+        <button type="button" class="kitchen-status-pill clock-pill" id="clock-pill" aria-label="House Clock and Weather">
+          <span class="k-stat" id="hud-clock-val">Day 1 • 10:30</span>
+          <span class="k-sep">•</span>
+          <span class="k-stat" id="hud-weather-val">☀️ CLEAR</span>
+        </button>
+      </div>
+
+      <!-- Phase 6 & 8 Active Task Synchronized Countdown & Progress Pill -->
+      <button type="button" class="active-task-hud hidden" id="active-task-hud" aria-label="Open active house task">
+        <span class="task-hud-badge" id="task-hud-badge">ACTIVE TASK</span>
+        <span class="task-hud-title" id="task-hud-title">Daily House Task</span>
+        <span class="task-hud-progress hidden" id="task-hud-progress">0%</span>
+        <span class="task-hud-timer" id="task-hud-timer">00:00</span>
+      </button>
+
+      <!-- Phase 15 & 17 Celebration / Finale / Siren Banner -->
+      <div class="celebration-banner hidden" id="celebration-banner"></div>
+
+      <!-- Subtle Status / Feedback Banner -->
+      <div class="status-banner hidden" id="status-banner"></div>
+
+      <!-- Bottom Touch & Action Controls -->
+      <div class="hud-bottom">
+        <!-- Left Virtual Joystick -->
+        <div class="joystick-zone" id="joystick-zone" aria-label="Movement joystick">
+          <div class="joystick-base" id="joystick-base">
+            <div class="joystick-ring"></div>
+            <div class="joystick-knob" id="joystick-knob"></div>
+          </div>
+          <span class="control-caption" id="move-hint">MOVE • DRAG RIGHT TO LOOK</span>
+        </div>
+
+        <!-- Right Action Cluster -->
+        <div class="action-cluster">
+          <button type="button" class="action-btn secondary" id="btn-stand" hidden>
+            <span class="action-icon" id="stand-icon">🧍</span>
+            <span class="action-text" id="stand-label">Stand Up</span>
+          </button>
+
+          <div class="context-btn-row">
+            <button type="button" class="action-btn alt-btn hidden" id="btn-interact-alt">
+              <span class="action-badge" id="interact-alt-badge">BED</span>
+              <span class="action-main" id="interact-alt-label">Sit</span>
+            </button>
+
+            <button type="button" class="action-btn primary hidden" id="btn-interact">
+              <span class="action-badge" id="interact-badge">INTERACT</span>
+              <span class="action-main" id="interact-label">Sit</span>
+            </button>
+          </div>
+
+          <div class="expression-bar" id="expression-bar" role="group" aria-label="Facial expression">
+            <button type="button" class="expr-btn active" data-expr="neutral" title="Neutral">😐</button>
+            <button type="button" class="expr-btn" data-expr="happy" title="Happy">😊</button>
+            <button type="button" class="expr-btn" data-expr="angry" title="Angry">😠</button>
+            <button type="button" class="expr-btn" data-expr="sad" title="Sad">😢</button>
+            <button type="button" class="expr-btn" data-expr="surprised" title="Surprised">😲</button>
+          </div>
+
+          <div class="motion-btn-row">
+            <button type="button" class="sprint-btn dance-btn" id="btn-dance" aria-pressed="false" aria-label="Toggle dance animation">
+              <span class="sprint-icon">💃</span>
+              <span class="sprint-label" id="dance-label">Dance</span>
+            </button>
+
+            <button type="button" class="sprint-btn" id="btn-sprint" aria-pressed="false">
+              <span class="sprint-icon">🏃</span>
+              <span class="sprint-label" id="sprint-label">Walk</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floorplan Modal -->
+    <div id="map-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="map-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="modal-eyebrow">INDOOR FLOORPLAN • 13 ZONES</p>
+            <h2 id="map-title">BIGG BOSS – THE HOUSE Interior</h2>
+          </div>
+          <button type="button" class="close-btn" id="btn-close-map" aria-label="Close floorplan">✕</button>
+        </div>
+        <canvas id="minimap-canvas" width="640" height="520"></canvas>
+        <div class="map-legend">
+          <span><i class="dot player"></i> You</span>
+          <span><i class="dot remote"></i> Real Players</span>
+          <span><i class="dot npc"></i> NPCs (Optional)</span>
+          <span><i class="dot tree"></i> Center Vine Tree</span>
+          <span><i class="dot door-closed"></i> Closed Door</span>
+          <span><i class="dot door-open"></i> Open Door</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Online Real Players & Multiplayer Drawer Modal -->
+    <div id="players-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="players-modal-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="modal-eyebrow" id="players-sync-badge">REAL MULTIPLAYER SESSION • MAX 15</p>
+            <h2 id="players-modal-title">Live Housemates</h2>
+          </div>
+          <button type="button" class="close-btn" id="btn-close-players" aria-label="Close live players list">✕</button>
+        </div>
+        <div class="players-list" id="players-list"></div>
+        <div class="players-footer">
+          <button type="button" class="pill-btn" id="btn-toggle-npcs">NPCs: Off</button>
+          <div class="players-footer-right">
+            <button type="button" class="pill-btn" id="btn-return-lobby">Lobby</button>
+            <button type="button" class="pill-btn danger-pill" id="btn-house-logout">Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 15 Housemates Character Selection Overlay -->
+    <div id="char-select-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="char-select-title">
+      <div class="modal-card char-modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="modal-eyebrow">BIGG BOSS • SWITCH HOUSEMATE AVATAR</p>
+            <h2 id="char-select-title">Select Your Housemate</h2>
+          </div>
+          <button type="button" class="close-btn hidden" id="btn-close-cast" aria-label="Close character selector">✕</button>
+        </div>
+        <div class="char-grid" id="char-grid"></div>
+        <div class="char-footer">
+          <div class="char-selected-summary" id="char-selected-summary">Player 01 • Aria — Spawns in Living Atrium</div>
+          <button type="button" class="enter-house-btn" id="btn-confirm-char">Switch Avatar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Control Dashboard Modal (Rendered/Shown ONLY for Authenticated ADMIN Role) -->
+    <div id="admin-dashboard-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="admin-dash-title">
+      <div class="modal-card admin-modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="modal-eyebrow">AUTHORIZED ADMIN SESSION</p>
+            <h2 id="admin-dash-title">Admin Control Dashboard</h2>
+          </div>
+          <button type="button" class="pill-btn admin-close-btn" id="btn-close-admin">Close Admin Control</button>
+        </div>
+        <div class="admin-dash-body" id="admin-dash-body">
+          <div class="admin-stat-grid">
+            <div class="admin-stat">
+              <span class="stat-label">REAL PLAYERS</span>
+              <span class="stat-val" id="admin-occupancy-val">1 / 15 Active</span>
+            </div>
+            <div class="admin-stat">
+              <span class="stat-label">CCTV FEEDS</span>
+              <span class="stat-val">24 Common-Area Cams</span>
+            </div>
+            <div class="admin-stat">
+              <span class="stat-label">SECURITY GATE</span>
+              <span class="stat-val" id="admin-door-status">Unlocked (ADMIN)</span>
+            </div>
+          </div>
+          <div class="admin-action-row">
+            <button type="button" class="pill-btn admin-pill" id="btn-admin-cctv">Live 24-Cam CCTV Wall</button>
+            <button type="button" class="pill-btn admin-pill" id="btn-admin-door-toggle">Toggle Admin Door</button>
+            <button type="button" class="pill-btn admin-pill" id="btn-admin-broadcast">Log House Broadcast</button>
+          </div>
+          <p class="admin-note">Authorized Control Room equipment, 24 live Three.js common-area CCTV cameras (bathrooms &amp; smoking lounge strictly excluded), and server-verified admin commands are active for this ADMIN account.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin-Only Live Synchronized 24-Cam 3D CCTV Surveillance Overlay -->
+    <div id="cctv-overlay" class="cctv-overlay hidden" role="region" aria-label="Admin Live CCTV Control">
+      <div class="cctv-topbar">
+        <div class="cctv-title-wrap">
+          <span class="cctv-rec-dot"></span>
+          <div>
+            <div class="cctv-eyebrow">ADMIN SURVEILLANCE • 24 COMMON-AREA CAMERAS</div>
+            <div class="cctv-title" id="cctv-header-title">24-Camera Common Area Matrix</div>
+          </div>
+        </div>
+        <div class="cctv-top-actions">
+          <span class="cctv-privacy-chip">Bathrooms &amp; Private Zones Excluded</span>
+          <select class="cctv-select" id="cctv-room-filter" aria-label="Filter CCTV cameras by zone">
+            <option value="all">All Rooms (24)</option>
+            <option value="living">Living Atrium (4)</option>
+            <option value="kitchen">Kitchen (4)</option>
+            <option value="dining">Dining Area (3)</option>
+            <option value="bedroom">Bedroom (3)</option>
+            <option value="garden">Garden &amp; Pool (4)</option>
+            <option value="activity">Activity Room (3)</option>
+            <option value="hall">Hall &amp; Gallery (3)</option>
+          </select>
+          <button type="button" class="pill-btn admin-pill" id="btn-cctv-page-prev">◀ Quad</button>
+          <span class="cctv-page-label" id="cctv-page-label">1 / 6</span>
+          <button type="button" class="pill-btn admin-pill" id="btn-cctv-page-next">Quad ▶</button>
+          <button type="button" class="pill-btn rec-btn" id="btn-cctv-record">⏺ Record Feed</button>
+          <span class="cctv-rec-timer hidden" id="cctv-rec-timer">00:00</span>
+          <button type="button" class="pill-btn admin-pill hidden" id="btn-cctv-prev">◀ Prev</button>
+          <button type="button" class="pill-btn admin-pill hidden" id="btn-cctv-next">Next ▶</button>
+          <button type="button" class="pill-btn admin-pill hidden" id="btn-cctv-grid">Quad Grid</button>
+          <button type="button" class="pill-btn admin-pill" id="btn-cctv-control-room">Control Room</button>
+          <button type="button" class="pill-btn danger-pill" id="btn-close-cctv">Exit CCTV</button>
+        </div>
+      </div>
+      <div id="cctv-grid-layer" class="cctv-grid-layer"></div>
+      <div id="cctv-fullscreen-hud" class="cctv-fullscreen-hud hidden">
+        <div class="cctv-fs-badge" id="cctv-fs-badge">CAM 01 • CENTRAL LIVING AREA</div>
+        <div class="cctv-fs-players" id="cctv-fs-players"></div>
+      </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="overlay-screen">
+      <div class="loader-card">
+        <div class="loader-emblem">
+          <div class="emblem-ring"></div>
+          <div class="emblem-core">👁️</div>
+        </div>
+        <h1>BIGG BOSS – THE HOUSE</h1>
+        <p class="loader-subtitle">Live Multiplayer Reality Mansion</p>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <p class="loader-status" id="loader-status">Initializing WebGL renderer...</p>
+      </div>
+    </div>
+
+    <!-- Unauthenticated Gate Screen -->
+    <div id="auth-gate-screen" class="overlay-screen hidden">
+      <div class="loader-card error-card">
+        <div class="error-icon">🔒</div>
+        <h2>Authentication Required</h2>
+        <p>Only authenticated housemates can enter BIGG BOSS – THE HOUSE. Sign in from the Android Lobby to join.</p>
+      </div>
+    </div>
+
+    <!-- Error Screen -->
+    <div id="error-screen" class="overlay-screen hidden">
+      <div class="loader-card error-card">
+        <div class="error-icon">⚠️</div>
+        <h2>Unable to Start 3D Engine</h2>
+        <p id="error-message">WebGL context could not be initialized on this device.</p>
+        <button type="button" class="retry-btn" id="btn-retry">Reload House</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,703 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private authenticated player account, unique Player ID, ban/eviction history flags, and server-verified role.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID owning this account." },
+        "email": { "type": "string", "description": "Private Google account email (owner/admin only)." },
+        "username": { "type": "string", "description": "Unique lowercase login username (optional for legacy Google accounts)." },
+        "displayName": { "type": "string", "description": "Unique public housemate display name (3-24 chars)." },
+        "normalizedName": { "type": "string", "description": "Lowercase alphanumeric slug used for uniqueness reservation." },
+        "playerId": { "type": "string", "description": "Unique persistent Player ID (e.g., GH-XXXX)." },
+        "characterId": { "type": "string", "description": "Selected 3D housemate model ID (Player 01 .. Player 15)." },
+        "role": { "type": "string", "enum": ["PLAYER", "ADMIN"], "description": "Authorization role; defaults to PLAYER on registration and is immutable from non-admin clients." },
+        "seasonId": { "type": "string", "description": "Currently active multiplayer season ID." },
+        "banned": { "type": "boolean", "description": "True when an authorized ADMIN has banned this account." },
+        "banReason": { "type": "string", "description": "Optional moderation note recorded when banned." },
+        "evictedSeasons": { "type": "integer", "description": "Historical count of seasons from which this player was evicted." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "displayName", "normalizedName", "playerId", "characterId", "role", "seasonId", "createdAt", "updatedAt"]
+    },
+    "AdminGrant": {
+      "title": "AdminGrant",
+      "description": "Server-managed administrator grant document. Client writes are strictly forbidden.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the trusted administrator." },
+        "role": { "type": "string", "enum": ["ADMIN"], "description": "Must equal ADMIN." },
+        "grantedBy": { "type": "string", "description": "Trusted backend issuer." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "createdAt"]
+    },
+    "DisplayNameClaim": {
+      "title": "DisplayNameClaim",
+      "description": "Atomic uniqueness lock preventing duplicate display names across accounts.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "displayName": { "type": "string", "description": "Original cased display name." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "createdAt"]
+    },
+    "SeasonSession": {
+      "title": "SeasonSession",
+      "description": "Shared Bigg Boss reality-show season metadata, captaincy state, and 15-player capacity counter.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Season display title." },
+        "status": { "type": "string", "enum": ["LOBBY", "LIVE", "ENDED"], "description": "Season lifecycle status controlled by ADMIN." },
+        "maxPlayers": { "type": "integer", "description": "Maximum allowed concurrent housemates (15)." },
+        "activeCount": { "type": "integer", "description": "Current number of active player slots (0..15)." },
+        "dayNightMode": { "type": "string", "enum": ["day", "evening", "night"], "description": "Current house lighting cycle." },
+        "captainUid": { "type": "string", "description": "UID of the reigning House Captain." },
+        "captainPlayerId": { "type": "string", "description": "Persistent Player ID of the reigning House Captain." },
+        "captainDisplayName": { "type": "string", "description": "Display name of the reigning House Captain." },
+        "captainTitle": { "type": "string", "description": "Title / week label for the current captaincy." },
+        "activeTaskId": { "type": "string", "description": "Currently active daily/captaincy task ID." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "status", "maxPlayers", "activeCount", "dayNightMode", "createdAt", "updatedAt"]
+    },
+    "SeasonMember": {
+      "title": "SeasonMember",
+      "description": "Public lobby & house roster entry for an authenticated human player (max 15 active per season).",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string", "description": "Parent season ID." },
+        "userId": { "type": "string", "description": "Firebase Auth UID of the player." },
+        "playerId": { "type": "string", "description": "Unique persistent Player ID." },
+        "displayName": { "type": "string", "description": "Public unique player display name." },
+        "characterId": { "type": "string", "description": "Selected 3D housemate skin ID (Player 01 .. Player 15)." },
+        "slotNumber": { "type": "integer", "description": "Assigned slot index in season (1..15)." },
+        "role": { "type": "string", "enum": ["PLAYER", "ADMIN"], "description": "Verified role in season." },
+        "status": { "type": "string", "enum": ["LOBBY", "IN_HOUSE", "OFFLINE", "REMOVED", "EVICTED", "BANNED"], "description": "Participation and presence state." },
+        "online": { "type": "boolean", "description": "True when active in lobby or 3D house." },
+        "sessionId": { "type": "string", "description": "Active client session token preventing duplicate concurrent sessions." },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "lastSeenAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "userId", "playerId", "displayName", "characterId", "slotNumber", "role", "status", "online", "sessionId", "joinedAt", "lastSeenAt"]
+    },
+    "AdminControlCommand": {
+      "title": "AdminControlCommand",
+      "description": "Server-gated Admin Control Room command and audit log entry.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "commandType": {
+          "type": "string",
+          "enum": ["DOOR_OVERRIDE", "HOUSE_LOCK", "BROADCAST", "VOTING_STATE", "KICK_SESSION", "SEASON_STATE", "BAN_USER", "EVICT_PLAYER", "CCTV_SWITCH", "CCTV_RECORDING", "TASK_CONTROL", "TEAM_ASSIGN", "CAPTAINCY_UPDATE", "RULE_WARNING", "SCHEDULE_PUBLISH", "RATION_REPLENISH", "KITCHEN_MANAGE", "REWARD_GRANT"]
+        },
+        "payloadSummary": { "type": "string" },
+        "issuedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "commandType", "payloadSummary", "issuedBy", "createdAt"]
+    },
+    "VotingCycle": {
+      "title": "VotingCycle",
+      "description": "Admin-managed nomination and public voting cycle.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["NOMINATIONS", "OPEN", "CLOSED", "EVICTED"] },
+        "nominatedUids": { "type": "array", "items": { "type": "string" } },
+        "nomineeSummaries": { "type": "array", "items": { "type": "string" } },
+        "npcVotesEnabled": { "type": "boolean" },
+        "evictedUid": { "type": "string" },
+        "evictedDisplayName": { "type": "string" },
+        "voteType": { "type": "string", "enum": ["EVICT", "SAVE"] },
+        "nominationsPerPlayer": { "type": "integer" },
+        "nominationEndTimeMillis": { "type": "integer" },
+        "votingDurationMinutes": { "type": "integer" },
+        "votingEndTimeMillis": { "type": "integer" },
+        "resultVisibility": { "type": "string", "enum": ["HIDDEN_UNTIL_CLOSED", "LIVE_TOTALS", "ADMIN_ONLY"] },
+        "tieBreakerPolicy": { "type": "string", "enum": ["ADMIN_DECIDES", "CAPTAIN_DECIDES", "RANDOM_DRAW", "NO_EVICTION"] },
+        "cancelledReason": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "title", "status", "nominatedUids", "nomineeSummaries", "npcVotesEnabled", "createdBy", "createdAt", "updatedAt"]
+    },
+    "NominationBallot": {
+      "title": "NominationBallot",
+      "description": "One-time peer nomination submission per active player during a NOMINATIONS cycle.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "cycleId": { "type": "string" },
+        "voterUid": { "type": "string" },
+        "voterName": { "type": "string" },
+        "targetUids": { "type": "array", "items": { "type": "string" } },
+        "targetNames": { "type": "array", "items": { "type": "string" } },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "cycleId", "voterUid", "voterName", "targetUids", "targetNames", "createdAt"]
+    },
+    "VotingBallot": {
+      "title": "VotingBallot",
+      "description": "Verified voting record cast during an OPEN voting cycle. Real player votes and optional NPC votes are strictly segregated.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "cycleId": { "type": "string" },
+        "voterUid": { "type": "string" },
+        "voterName": { "type": "string" },
+        "targetUid": { "type": "string" },
+        "sourceType": { "type": "string", "enum": ["REAL_PLAYER", "NPC"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "cycleId", "voterUid", "targetUid", "sourceType", "createdAt"]
+    },
+    "EvictionRecord": {
+      "title": "EvictionRecord",
+      "description": "Immutable historical record of housemate evictions preserved across seasons.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "cycleId": { "type": "string" },
+        "userId": { "type": "string" },
+        "playerId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "characterId": { "type": "string" },
+        "realVotes": { "type": "integer" },
+        "npcVotes": { "type": "integer" },
+        "announcementText": { "type": "string" },
+        "evictedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "cycleId", "userId", "playerId", "displayName", "characterId", "realVotes", "npcVotes", "announcementText", "evictedBy", "createdAt"]
+    },
+    "AdminAnnouncement": {
+      "title": "AdminAnnouncement",
+      "description": "Broadcast announcement from the Admin Control Room with Indian Hindi voice preference.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "message": { "type": "string" },
+        "presetId": { "type": "string" },
+        "languageTag": { "type": "string" },
+        "voiceGender": { "type": "string", "enum": ["FEMALE", "MALE"] },
+        "issuedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "message", "languageTag", "voiceGender", "issuedBy", "createdAt"]
+    },
+    "HouseTask": {
+      "title": "HouseTask",
+      "description": "Admin-managed indoor house activity or captaincy competition with synchronized timers and history.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "instructions": { "type": "string" },
+        "activityType": { "type": "string", "enum": ["MEMORY", "QUIZ", "PUZZLE", "TREASURE_HUNT", "TEAM_COORDINATION", "OBSERVATION", "OBSTACLE", "COOKING", "CHECKPOINT"] },
+        "assignmentMode": { "type": "string", "enum": ["INDIVIDUAL", "GROUP", "TEAM", "HOUSE"] },
+        "category": { "type": "string", "enum": ["INDIVIDUAL", "GROUP", "TEAM", "DAILY", "WEEKLY", "HOUSE", "CAPTAIN", "SECRET"] },
+        "difficulty": { "type": "string", "enum": ["EASY", "MEDIUM", "HARD", "EXTREME"] },
+        "isCaptaincy": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["DRAFT", "AVAILABLE", "ASSIGNED", "IN_PROGRESS", "ACTIVE", "PAUSED", "COMPLETED", "FAILED", "EXPIRED", "CANCELLED"] },
+        "targetRoom": { "type": "string" },
+        "durationSeconds": { "type": "integer" },
+        "startTimeMillis": { "type": "integer" },
+        "endTimeMillis": { "type": "integer" },
+        "promptQuestion": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "assignedUids": { "type": "array", "items": { "type": "string" } },
+        "assignedTeamId": { "type": "string" },
+        "requiredCheckpoints": { "type": "array", "items": { "type": "string" } },
+        "requiredRecipeId": { "type": "string" },
+        "progressPercent": { "type": "integer" },
+        "rewardAchievement": { "type": "string" },
+        "maxPoints": { "type": "integer" },
+        "winningUid": { "type": "string" },
+        "winningTeamId": { "type": "string" },
+        "winnerSummary": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "title", "description", "instructions", "activityType", "assignmentMode", "isCaptaincy", "status", "targetRoom", "durationSeconds", "startTimeMillis", "endTimeMillis", "promptQuestion", "options", "maxPoints", "createdBy", "createdAt", "updatedAt"]
+    },
+    "TaskAnswerSecret": {
+      "title": "TaskAnswerSecret",
+      "description": "Admin-only secret answer key used to verify task submissions without client-side answer leakage.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "expectedAnswer": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "taskId", "expectedAnswer", "updatedBy", "updatedAt"]
+    },
+    "TaskSubmission": {
+      "title": "TaskSubmission",
+      "description": "Unique one-per-player task answer/result submission with server/admin-verified scoring.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "userId": { "type": "string" },
+        "playerId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "teamId": { "type": "string" },
+        "answerText": { "type": "string" },
+        "elapsedSeconds": { "type": "integer" },
+        "verificationStatus": { "type": "string", "enum": ["SUBMITTED", "VERIFIED", "REJECTED"] },
+        "awardedScore": { "type": "integer" },
+        "reviewedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "taskId", "userId", "playerId", "displayName", "answerText", "elapsedSeconds", "verificationStatus", "awardedScore", "createdAt", "updatedAt"]
+    },
+    "HouseTeam": {
+      "title": "HouseTeam",
+      "description": "Admin-assigned housemate team dividing up to 15 real players with shared color and live score.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "name": { "type": "string" },
+        "colorHex": { "type": "string" },
+        "memberUids": { "type": "array", "items": { "type": "string" } },
+        "score": { "type": "integer" },
+        "winsCount": { "type": "integer" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "name", "colorHex", "memberUids", "score", "winsCount", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "CaptaincyRecord": {
+      "title": "CaptaincyRecord",
+      "description": "Immutable history of declared House Captains and competition scores.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "captainUid": { "type": "string" },
+        "captainPlayerId": { "type": "string" },
+        "captainDisplayName": { "type": "string" },
+        "captainCharacterId": { "type": "string" },
+        "title": { "type": "string" },
+        "scoreAwarded": { "type": "integer" },
+        "assignedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "captainUid", "captainPlayerId", "captainDisplayName", "captainCharacterId", "title", "scoreAwarded", "assignedBy", "createdAt"]
+    },
+    "HouseRule": {
+      "title": "HouseRule",
+      "description": "Official Glass House rule configurable by Admin and readable by all housemates.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "ruleNumber": { "type": "integer" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "severity": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+        "active": { "type": "boolean" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "ruleNumber", "title", "description", "severity", "active", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "RuleViolation": {
+      "title": "RuleViolation",
+      "description": "Recorded housemate rule warning issued by Admin.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "ruleTitle": { "type": "string" },
+        "targetUid": { "type": "string" },
+        "targetPlayerId": { "type": "string" },
+        "targetDisplayName": { "type": "string" },
+        "warningLevel": { "type": "string", "enum": ["NOTICE", "WARNING", "FINAL_WARNING"] },
+        "note": { "type": "string" },
+        "issuedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "ruleId", "ruleTitle", "targetUid", "targetPlayerId", "targetDisplayName", "warningLevel", "note", "issuedBy", "createdAt"]
+    },
+    "DailyScheduleSlot": {
+      "title": "DailyScheduleSlot",
+      "description": "Admin-configurable daily routine item (Morning Wake-Up through Night Schedule).",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "orderIndex": { "type": "integer" },
+        "activityKey": { "type": "string" },
+        "title": { "type": "string" },
+        "timeLabel": { "type": "string" },
+        "location": { "type": "string" },
+        "description": { "type": "string" },
+        "isCurrent": { "type": "boolean" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "orderIndex", "activityKey", "title", "timeLabel", "location", "description", "isCurrent", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "CctvRecording": {
+      "title": "CctvRecording",
+      "description": "Admin-only persistent CCTV clip stored in Firebase Storage with date/camera archive metadata.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "cameraId": { "type": "string" },
+        "cameraLabel": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "downloadUrl": { "type": "string" },
+        "dateKey": { "type": "string" },
+        "startedAtMillis": { "type": "integer" },
+        "durationMillis": { "type": "integer" },
+        "sizeBytes": { "type": "integer" },
+        "mimeType": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "cameraId", "cameraLabel", "storagePath", "downloadUrl", "dateKey", "startedAtMillis", "durationMillis", "sizeBytes", "mimeType", "recordedBy", "createdAt"]
+    },
+    "RationItem": {
+      "title": "RationItem",
+      "description": "Shared house kitchen ration inventory item with stock bounds and admin permission controls.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "itemId": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "unit": { "type": "string" },
+        "quantity": { "type": "integer" },
+        "maxQuantity": { "type": "integer" },
+        "minThreshold": { "type": "integer" },
+        "permitted": { "type": "boolean" },
+        "energyValue": { "type": "integer" },
+        "lastUpdatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "itemId", "name", "category", "unit", "quantity", "maxQuantity", "minThreshold", "permitted", "energyValue", "lastUpdatedBy", "createdAt", "updatedAt"]
+    },
+    "KitchenPlayerState": {
+      "title": "KitchenPlayerState",
+      "description": "Player virtual energy, hunger, collected ingredients pouch, and cooking cooldown timestamps.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "energy": { "type": "integer" },
+        "hunger": { "type": "integer" },
+        "bagItems": { "type": "object" },
+        "activeCookingId": { "type": "string" },
+        "lastCollectedAtMillis": { "type": "integer" },
+        "lastCookedAtMillis": { "type": "integer" },
+        "lastEatAtMillis": { "type": "integer" },
+        "mealsCookedCount": { "type": "integer" },
+        "mealsEatenCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "userId", "displayName", "energy", "hunger", "bagItems", "lastCollectedAtMillis", "lastCookedAtMillis", "lastEatAtMillis", "mealsCookedCount", "mealsEatenCount", "updatedAt"]
+    },
+    "CookingSession": {
+      "title": "CookingSession",
+      "description": "Shared multiplayer virtual kitchen cooking session and prepared meal counter servings.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "stationId": { "type": "string" },
+        "recipeId": { "type": "string" },
+        "recipeName": { "type": "string" },
+        "chefUid": { "type": "string" },
+        "chefDisplayName": { "type": "string" },
+        "status": { "type": "string", "enum": ["COOKING", "READY", "CLAIMED", "CANCELLED"] },
+        "ingredientsUsed": { "type": "object" },
+        "startedAtMillis": { "type": "integer" },
+        "readyAtMillis": { "type": "integer" },
+        "energyRestore": { "type": "integer" },
+        "servingsTotal": { "type": "integer" },
+        "servingsRemaining": { "type": "integer" },
+        "claimedByUids": { "type": "array", "items": { "type": "string" } },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "stationId", "recipeId", "recipeName", "chefUid", "chefDisplayName", "status", "ingredientsUsed", "startedAtMillis", "readyAtMillis", "energyRestore", "servingsTotal", "servingsRemaining", "claimedByUids", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "TaskPlayerProgress": {
+      "title": "TaskPlayerProgress",
+      "description": "Per-player live indoor task checkpoint progress, completion percentage, and status.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "completedSteps": { "type": "array", "items": { "type": "string" } },
+        "percent": { "type": "integer" },
+        "status": { "type": "string", "enum": ["ASSIGNED", "IN_PROGRESS", "COMPLETED", "FAILED", "EXPIRED"] },
+        "elapsedSeconds": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "taskId", "userId", "displayName", "completedSteps", "percent", "status", "elapsedSeconds", "updatedAt"]
+    },
+    "PlayerLeaderboardEntry": {
+      "title": "PlayerLeaderboardEntry",
+      "description": "Housemate virtual points, tasks completed, cooking contributions, and unlocked achievements.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "userId": { "type": "string" },
+        "playerId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "characterId": { "type": "string" },
+        "teamId": { "type": "string" },
+        "points": { "type": "integer" },
+        "housePointsContribution": { "type": "integer" },
+        "tasksCompleted": { "type": "integer" },
+        "mealsCooked": { "type": "integer" },
+        "achievements": { "type": "array", "items": { "type": "string" } },
+        "lastGrantId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "userId", "playerId", "displayName", "characterId", "points", "housePointsContribution", "tasksCompleted", "mealsCooked", "achievements", "lastGrantId", "updatedAt"]
+    },
+    "RewardGrant": {
+      "title": "RewardGrant",
+      "description": "Immutable idempotent reward ledger entry preventing duplicate payouts per task or meal.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "grantId": { "type": "string" },
+        "userId": { "type": "string" },
+        "sourceType": { "type": "string", "enum": ["TASK", "COOKING", "ADMIN"] },
+        "sourceId": { "type": "string" },
+        "awardedPoints": { "type": "integer" },
+        "achievementId": { "type": "string" },
+        "grantedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "grantId", "userId", "sourceType", "sourceId", "awardedPoints", "grantedBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "PII-isolated private user account, unique Player ID, moderation state, and session metadata."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminGrant" },
+      "description": "Trusted backend-managed admin registry. Client writes are disabled."
+    },
+    "/displayNames/{normalizedName}": {
+      "schema": { "$ref": "#/entities/DisplayNameClaim" },
+      "description": "Unique display name registry preventing duplicate housemate names."
+    },
+    "/seasons/{seasonId}": {
+      "schema": { "$ref": "#/entities/SeasonSession" },
+      "description": "Shared reality-show season configuration, reigning House Captain, and 15-player capacity counter."
+    },
+    "/seasons/{seasonId}/members/{userId}": {
+      "schema": { "$ref": "#/entities/SeasonMember" },
+      "description": "Authenticated human housemates participating in a shared season (max 15 active)."
+    },
+    "/seasons/{seasonId}/adminControls/{controlId}": {
+      "schema": { "$ref": "#/entities/AdminControlCommand" },
+      "description": "Admin-only control room commands, CCTV logs, task actions, and moderation audit entries."
+    },
+    "/seasons/{seasonId}/votingCycles/{cycleId}": {
+      "schema": { "$ref": "#/entities/VotingCycle" },
+      "description": "Admin-managed nomination lists and voting cycle state."
+    },
+    "/seasons/{seasonId}/votingCycles/{cycleId}/votes/{voterId}": {
+      "schema": { "$ref": "#/entities/VotingBallot" },
+      "description": "Stored real-player and strictly separated NPC ballots."
+    },
+    "/seasons/{seasonId}/evictions/{evictionId}": {
+      "schema": { "$ref": "#/entities/EvictionRecord" },
+      "description": "Historical eviction records managed by trusted administrators."
+    },
+    "/seasons/{seasonId}/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/AdminAnnouncement" },
+      "description": "Live Hindi/English housemate broadcast announcements."
+    },
+    "/seasons/{seasonId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/HouseTask" },
+      "description": "Daily interactive tasks and captaincy competitions managed by ADMIN."
+    },
+    "/seasons/{seasonId}/tasks/{taskId}/answerKey/{keyDoc}": {
+      "schema": { "$ref": "#/entities/TaskAnswerSecret" },
+      "description": "Admin-only secret expected answers for automated verification."
+    },
+    "/seasons/{seasonId}/tasks/{taskId}/submissions/{userId}": {
+      "schema": { "$ref": "#/entities/TaskSubmission" },
+      "description": "Duplicate-prevented per-player task submissions and verified scores."
+    },
+    "/seasons/{seasonId}/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/HouseTeam" },
+      "description": "Synchronized housemate teams dividing up to 15 real players."
+    },
+    "/seasons/{seasonId}/captaincyHistory/{recordId}": {
+      "schema": { "$ref": "#/entities/CaptaincyRecord" },
+      "description": "Historical House Captain winners and scores."
+    },
+    "/seasons/{seasonId}/houseRules/{ruleId}": {
+      "schema": { "$ref": "#/entities/HouseRule" },
+      "description": "Official House Rules authored by Admin and viewable by all housemates."
+    },
+    "/seasons/{seasonId}/ruleViolations/{violationId}": {
+      "schema": { "$ref": "#/entities/RuleViolation" },
+      "description": "Admin-issued rule violation warnings and history."
+    },
+    "/seasons/{seasonId}/dailySchedule/{slotId}": {
+      "schema": { "$ref": "#/entities/DailyScheduleSlot" },
+      "description": "Configurable daily routine schedule for housemates."
+    },
+    "/seasons/{seasonId}/cctvRecordings/{recordingId}": {
+      "schema": { "$ref": "#/entities/CctvRecording" },
+      "description": "Admin-only persistent CCTV recording index pointing to Firebase Storage WebM/MP4 clips."
+    },
+    "/seasons/{seasonId}/kitchenRations/{itemId}": {
+      "schema": { "$ref": "#/entities/RationItem" },
+      "description": "Shared virtual kitchen ration stock levels and admin availability controls."
+    },
+    "/seasons/{seasonId}/kitchenProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/KitchenPlayerState" },
+      "description": "Player nutrition energy/hunger meters, gathered ration pouch, and cooking cooldowns."
+    },
+    "/seasons/{seasonId}/kitchenCooking/{sessionId}": {
+      "schema": { "$ref": "#/entities/CookingSession" },
+      "description": "Synchronized active cooking stations and prepared virtual meal servings."
+    },
+    "/seasons/{seasonId}/tasks/{taskId}/progress/{userId}": {
+      "schema": { "$ref": "#/entities/TaskPlayerProgress" },
+      "description": "Real-time per-player checkpoint and completion progress for interactive 3D house tasks."
+    },
+    "/seasons/{seasonId}/leaderboard/{userId}": {
+      "schema": { "$ref": "#/entities/PlayerLeaderboardEntry" },
+      "description": "Season leaderboard points, contributions, and unlocked virtual achievements."
+    },
+    "/seasons/{seasonId}/rewardGrants/{grantId}": {
+      "schema": { "$ref": "#/entities/RewardGrant" },
+      "description": "Atomic duplicate-proof reward ledger guaranteeing one-time points payouts."
+    },
+    "AiControlConfig": {
+      "title": "AiControlConfig",
+      "description": "Admin-only Phase 9 ChatGPT AI House Manager state, operating mode, API transparency status, and offline unseen counter.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["MANUAL", "ASSIST", "AUTO"] },
+        "emergencyStopped": { "type": "boolean" },
+        "apiProvider": { "type": "string", "enum": ["RULE_ENGINE_NO_API_KEY", "OPENAI_ENV_KEY"] },
+        "autoHindiAnnouncements": { "type": "boolean" },
+        "autoKitchenMonitor": { "type": "boolean" },
+        "autoTaskCoordinator": { "type": "boolean" },
+        "autoTimerMonitor": { "type": "boolean" },
+        "tickIntervalMinutes": { "type": "integer" },
+        "lastTickAtMillis": { "type": "integer" },
+        "lastAdminSeenAtMillis": { "type": "integer" },
+        "unseenOfflineCount": { "type": "integer" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "enabled", "mode", "emergencyStopped", "apiProvider", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "AiScheduledEvent": {
+      "title": "AiScheduledEvent",
+      "description": "Offline-capable scheduled AI Hindi announcements, tasks, kitchen checks, and timer rules.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "actionType": { "type": "string", "enum": ["HINDI_ANNOUNCEMENT", "DAILY_TASK", "KITCHEN_CHECK", "TIMER_CHECK", "HOUSE_ACTIVITY"] },
+        "title": { "type": "string" },
+        "messageOrPayload": { "type": "string" },
+        "targetTimeMillis": { "type": "integer" },
+        "recurrenceMinutes": { "type": "integer" },
+        "status": { "type": "string", "enum": ["PENDING", "EXECUTED", "PROPOSED", "CANCELLED", "PAUSED"] },
+        "modeOverride": { "type": "string", "enum": ["INHERIT", "MANUAL", "ASSIST", "AUTO"] },
+        "executionKey": { "type": "string" },
+        "lastExecutedAtMillis": { "type": "integer" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "actionType", "title", "messageOrPayload", "targetTimeMillis", "status", "executionKey", "createdBy", "createdAt", "updatedAt"]
+    },
+    "AiApprovalProposal": {
+      "title": "AiApprovalProposal",
+      "description": "Pending ASSIST-mode AI House Manager recommendation awaiting explicit Admin approval.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "category": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "hindiAnnouncement": { "type": "string" },
+        "payloadJson": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "EXECUTED", "CANCELLED"] },
+        "executionKey": { "type": "string" },
+        "reviewedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "category", "title", "summary", "status", "executionKey", "createdAt", "updatedAt"]
+    },
+    "AiActivityLog": {
+      "title": "AiActivityLog",
+      "description": "Admin-only idempotent AI House Manager execution and Hindi announcement history.",
+      "type": "object",
+      "properties": {
+        "seasonId": { "type": "string" },
+        "category": { "type": "string" },
+        "mode": { "type": "string" },
+        "source": { "type": "string" },
+        "title": { "type": "string" },
+        "detail": { "type": "string" },
+        "hindiAnnouncement": { "type": "string" },
+        "executionKey": { "type": "string" },
+        "executedAtMillis": { "type": "integer" },
+        "actorUid": { "type": "string" },
+        "acknowledgedByAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seasonId", "category", "mode", "source", "title", "detail", "executionKey", "executedAtMillis", "actorUid", "createdAt"]
+    }
+  },
+  "firestore_phase9_10_notes": {
+    "/seasons/{seasonId}/adminPresence/{userId}": "Secret Admin presence document invisible to normal players.",
+    "/seasons/{seasonId}/aiConfig/{configId}": "Admin-only AI House Manager configuration.",
+    "/seasons/{seasonId}/aiSchedules/{scheduleId}": "Admin-only AI offline scheduled actions.",
+    "/seasons/{seasonId}/aiProposals/{proposalId}": "Admin-only ASSIST-mode AI recommendations queue.",
+    "/seasons/{seasonId}/aiLogs/{logId}": "Admin-only AI execution and offline summary logs.",
+    "/seasons/{seasonId}/votingCycles/{cycleId}/nominations/{voterId}": "One peer nomination ballot per eligible player."
+  },
+  "firestore_phase10_11_notes": {
+    "/adminCredentials/{credId}": "Server-only salted scrypt password digest for BIGGBOSS Admin login.",
+    "/adminRateLimits/{limitId}": "Server-only brute-force attempt rate limiting for Admin login.",
+    "/adminSessions/{sessionId}": "Server-only expiring Admin sessions.",
+    "/seasons/{seasonId}/vipPrivileges/{userId}": "Admin-granted VIP privileges and VIP Room access separate from Captaincy.",
+    "/seasons/{seasonId}/privilegeHistory/{recordId}": "History of Captaincy assignments/removals/powers and VIP grants/revocations.",
+    "/seasons/{seasonId}/gameSettings/{settingId}": "Admin-configured game rules and default Captain/VIP settings.",
+    "/seasons/{seasonId}/adminAuditLogs/{logId}": "Admin-only audit ledger for security, tally calculation, and house governance."
+  }
+}
+

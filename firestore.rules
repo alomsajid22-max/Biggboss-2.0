@@ -1,0 +1,1403 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Trusted server-assigned admin check ONLY via backend-managed /admins/{uid}
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isUserBanned(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
+             get(/databases/$(database)/documents/users/$(uid)).data.get('banned', false) == true;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidCharacterId(cid) {
+      return cid is string && cid.size() >= 8 && cid.size() <= 12 &&
+             cid.matches('^Player (0[1-9]|1[0-5])$');
+    }
+
+    // --- VALIDATION BLUEPRINTS ---
+    function isValidUserAccount(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 160)) &&
+             (!('username' in data) || data.username == null || (data.username is string && data.username.size() >= 3 && data.username.size() <= 24 && data.username.matches('^[a-z0-9_\\-]+$'))) &&
+             data.displayName is string && data.displayName.size() >= 3 && data.displayName.size() <= 24 &&
+             data.normalizedName is string && data.normalizedName.size() >= 3 && data.normalizedName.size() <= 24 &&
+             data.normalizedName.matches('^[a-z0-9_\\-]+$') &&
+             data.playerId is string && data.playerId.size() >= 4 && data.playerId.size() <= 20 &&
+             isValidCharacterId(data.characterId) &&
+             data.role is string && data.role in ['PLAYER', 'ADMIN'] &&
+             data.seasonId is string && isValidId(data.seasonId) &&
+             (!('banned' in data) || data.banned is bool) &&
+             (!('banReason' in data) || data.banReason == null || (data.banReason is string && data.banReason.size() <= 200)) &&
+             (!('evictedSeasons' in data) || (data.evictedSeasons is int && data.evictedSeasons >= 0)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidDisplayNameClaim(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 3 && data.displayName.size() <= 24 &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidSeason(data) {
+      return data.title is string && data.title.size() >= 3 && data.title.size() <= 60 &&
+             data.status is string && data.status in ['LOBBY', 'LIVE', 'ENDED'] &&
+             data.maxPlayers is int && data.maxPlayers == 15 &&
+             data.activeCount is int && data.activeCount >= 0 && data.activeCount <= 15 &&
+             data.dayNightMode is string && data.dayNightMode in ['day', 'evening', 'night'] &&
+             (!('captainUid' in data) || data.captainUid == null || (data.captainUid is string && data.captainUid.size() <= 128)) &&
+             (!('captainPlayerId' in data) || data.captainPlayerId == null || (data.captainPlayerId is string && data.captainPlayerId.size() <= 24)) &&
+             (!('captainDisplayName' in data) || data.captainDisplayName == null || (data.captainDisplayName is string && data.captainDisplayName.size() <= 40)) &&
+             (!('captainTitle' in data) || data.captainTitle == null || (data.captainTitle is string && data.captainTitle.size() <= 80)) &&
+             (!('captainVipAccess' in data) || data.captainVipAccess is bool) &&
+             (!('captainImmunity' in data) || data.captainImmunity is bool) &&
+             (!('captainDoubleVote' in data) || data.captainDoubleVote is bool) &&
+             (!('captainTieBreaker' in data) || data.captainTieBreaker is bool) &&
+             (!('activeTaskId' in data) || data.activeTaskId == null || (data.activeTaskId is string && data.activeTaskId.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSeasonMember(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.playerId is string && data.playerId.size() >= 4 && data.playerId.size() <= 20 &&
+             data.displayName is string && data.displayName.size() >= 3 && data.displayName.size() <= 24 &&
+             isValidCharacterId(data.characterId) &&
+             data.slotNumber is int && data.slotNumber >= 1 && data.slotNumber <= 15 &&
+             data.role is string && data.role in ['PLAYER', 'ADMIN'] &&
+             data.status is string && data.status in ['LOBBY', 'IN_HOUSE', 'OFFLINE', 'REMOVED', 'EVICTED', 'BANNED'] &&
+             data.online is bool &&
+             data.sessionId is string && data.sessionId.size() >= 6 && data.sessionId.size() <= 64 &&
+             isValidTimestamp(data.joinedAt) &&
+             isValidTimestamp(data.lastSeenAt);
+    }
+
+    function isValidAdminControl(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.commandType is string &&
+             data.commandType in ['DOOR_OVERRIDE', 'HOUSE_LOCK', 'BROADCAST', 'VOTING_STATE', 'VOTING_CANCEL', 'KICK_SESSION', 'SEASON_STATE', 'BAN_USER', 'EVICT_PLAYER', 'CCTV_SWITCH', 'CCTV_RECORDING', 'TASK_CONTROL', 'TEAM_ASSIGN', 'CAPTAINCY_UPDATE', 'CAPTAIN_POWER', 'VIP_PRIVILEGE', 'GAME_SETTINGS', 'ADMIN_SECURITY', 'RULE_WARNING', 'SCHEDULE_PUBLISH', 'RATION_REPLENISH', 'KITCHEN_MANAGE', 'REWARD_GRANT', 'AI_CONFIG', 'AI_EMERGENCY_STOP', 'AI_EXECUTION'] &&
+             data.payloadSummary is string && data.payloadSummary.size() >= 1 && data.payloadSummary.size() <= 300 &&
+             data.issuedBy is string && data.issuedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidCctvRecording(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.cameraId is string && data.cameraId.size() >= 3 && data.cameraId.size() <= 40 &&
+             !data.cameraId.matches('.*(bathroom|washroom|changing|private|smoking).*') &&
+             data.cameraLabel is string && data.cameraLabel.size() >= 3 && data.cameraLabel.size() <= 80 &&
+             data.storagePath is string && data.storagePath.size() >= 10 && data.storagePath.size() <= 240 &&
+             data.downloadUrl is string && data.downloadUrl.size() >= 12 && data.downloadUrl.size() <= 1024 &&
+             data.downloadUrl.matches('^https://.*') &&
+             data.dateKey is string && data.dateKey.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+             data.startedAtMillis is int && data.startedAtMillis > 0 &&
+             data.durationMillis is int && data.durationMillis >= 500 && data.durationMillis <= 300000 &&
+             data.sizeBytes is int && data.sizeBytes > 0 && data.sizeBytes <= 15728640 &&
+             data.mimeType is string && data.mimeType.size() >= 6 && data.mimeType.size() <= 80 &&
+             data.recordedBy is string && data.recordedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidHouseTask(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 100 &&
+             data.description is string && data.description.size() >= 3 && data.description.size() <= 400 &&
+             data.instructions is string && data.instructions.size() >= 3 && data.instructions.size() <= 800 &&
+             data.activityType is string && data.activityType in ['MEMORY', 'QUIZ', 'PUZZLE', 'TREASURE_HUNT', 'TEAM_COORDINATION', 'OBSERVATION', 'OBSTACLE', 'COOKING', 'CHECKPOINT'] &&
+             data.assignmentMode is string && data.assignmentMode in ['INDIVIDUAL', 'GROUP', 'TEAM', 'HOUSE'] &&
+             (!('category' in data) || data.category == null || (data.category is string && data.category in ['INDIVIDUAL', 'GROUP', 'TEAM', 'DAILY', 'WEEKLY', 'HOUSE', 'CAPTAIN', 'SECRET'])) &&
+             (!('difficulty' in data) || data.difficulty == null || (data.difficulty is string && data.difficulty in ['EASY', 'MEDIUM', 'HARD', 'EXTREME'])) &&
+             data.isCaptaincy is bool &&
+             data.status is string && data.status in ['DRAFT', 'AVAILABLE', 'ASSIGNED', 'IN_PROGRESS', 'ACTIVE', 'PAUSED', 'COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED'] &&
+             data.targetRoom is string && data.targetRoom.size() >= 2 && data.targetRoom.size() <= 60 &&
+             data.durationSeconds is int && data.durationSeconds >= 30 && data.durationSeconds <= 7200 &&
+             data.startTimeMillis is int && data.startTimeMillis >= 0 &&
+             data.endTimeMillis is int && data.endTimeMillis >= 0 &&
+             data.promptQuestion is string && data.promptQuestion.size() <= 400 &&
+             data.options is list && data.options.size() <= 6 &&
+             (!('assignedUids' in data) || data.assignedUids == null || (data.assignedUids is list && data.assignedUids.size() <= 15 && (data.assignedUids.size() == 0 || data.assignedUids[0] is string))) &&
+             (!('assignedTeamId' in data) || data.assignedTeamId == null || (data.assignedTeamId is string && data.assignedTeamId.size() <= 128)) &&
+             (!('requiredCheckpoints' in data) || data.requiredCheckpoints == null || (data.requiredCheckpoints is list && data.requiredCheckpoints.size() <= 12 && (data.requiredCheckpoints.size() == 0 || data.requiredCheckpoints[0] is string))) &&
+             (!('requiredRecipeId' in data) || data.requiredRecipeId == null || (data.requiredRecipeId is string && data.requiredRecipeId.size() <= 64)) &&
+             (!('progressPercent' in data) || data.progressPercent == null || (data.progressPercent is int && data.progressPercent >= 0 && data.progressPercent <= 100)) &&
+             (!('rewardAchievement' in data) || data.rewardAchievement == null || (data.rewardAchievement is string && data.rewardAchievement.size() <= 80)) &&
+             data.maxPoints is int && data.maxPoints >= 1 && data.maxPoints <= 1000 &&
+             (!('winningUid' in data) || data.winningUid == null || (data.winningUid is string && data.winningUid.size() <= 128)) &&
+             (!('winningTeamId' in data) || data.winningTeamId == null || (data.winningTeamId is string && data.winningTeamId.size() <= 128)) &&
+             (!('winnerSummary' in data) || data.winnerSummary == null || (data.winnerSummary is string && data.winnerSummary.size() <= 240)) &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTaskAnswerSecret(data, seasonId, taskId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.taskId is string && data.taskId == taskId &&
+             data.expectedAnswer is string && data.expectedAnswer.size() >= 1 && data.expectedAnswer.size() <= 240 &&
+             data.updatedBy is string && data.updatedBy == request.auth.uid &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTaskSubmission(data, seasonId, taskId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.taskId is string && data.taskId == taskId &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.playerId is string && data.playerId.size() >= 4 && data.playerId.size() <= 20 &&
+             data.displayName is string && data.displayName.size() >= 3 && data.displayName.size() <= 24 &&
+             (!('teamId' in data) || data.teamId == null || (data.teamId is string && data.teamId.size() <= 128)) &&
+             data.answerText is string && data.answerText.size() >= 1 && data.answerText.size() <= 300 &&
+             data.elapsedSeconds is int && data.elapsedSeconds >= 0 && data.elapsedSeconds <= 7200 &&
+             data.verificationStatus is string && data.verificationStatus in ['SUBMITTED', 'VERIFIED', 'REJECTED'] &&
+             data.awardedScore is int && data.awardedScore >= 0 && data.awardedScore <= 1000 &&
+             (!('reviewedBy' in data) || data.reviewedBy == null || (data.reviewedBy is string && data.reviewedBy.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidHouseTeam(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 40 &&
+             data.colorHex is string && data.colorHex.size() == 7 && data.colorHex.matches('^#[0-9a-fA-F]{6}$') &&
+             data.memberUids is list && data.memberUids.size() <= 15 &&
+             data.score is int && data.score >= 0 && data.score <= 100000 &&
+             data.winsCount is int && data.winsCount >= 0 && data.winsCount <= 1000 &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCaptaincyRecord(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             (!('taskId' in data) || data.taskId == null || (data.taskId is string && data.taskId.size() <= 128)) &&
+             data.captainUid is string && data.captainUid.size() >= 1 && data.captainUid.size() <= 128 &&
+             data.captainPlayerId is string && data.captainPlayerId.size() >= 4 && data.captainPlayerId.size() <= 20 &&
+             data.captainDisplayName is string && data.captainDisplayName.size() >= 3 && data.captainDisplayName.size() <= 24 &&
+             isValidCharacterId(data.captainCharacterId) &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.scoreAwarded is int && data.scoreAwarded >= 0 && data.scoreAwarded <= 1000 &&
+             data.assignedBy is string && data.assignedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidHouseRule(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.ruleNumber is int && data.ruleNumber >= 1 && data.ruleNumber <= 100 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.description is string && data.description.size() >= 3 && data.description.size() <= 360 &&
+             data.severity is string && data.severity in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] &&
+             data.active is bool &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidRuleViolation(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.ruleId is string && data.ruleId.size() >= 1 && data.ruleId.size() <= 128 &&
+             data.ruleTitle is string && data.ruleTitle.size() >= 2 && data.ruleTitle.size() <= 80 &&
+             data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128 &&
+             data.targetPlayerId is string && data.targetPlayerId.size() >= 4 && data.targetPlayerId.size() <= 20 &&
+             data.targetDisplayName is string && data.targetDisplayName.size() >= 3 && data.targetDisplayName.size() <= 24 &&
+             data.warningLevel is string && data.warningLevel in ['NOTICE', 'WARNING', 'FINAL_WARNING'] &&
+             data.note is string && data.note.size() >= 2 && data.note.size() <= 240 &&
+             data.issuedBy is string && data.issuedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidDailyScheduleSlot(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.orderIndex is int && data.orderIndex >= 1 && data.orderIndex <= 20 &&
+             data.activityKey is string && data.activityKey.size() >= 2 && data.activityKey.size() <= 40 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 60 &&
+             data.timeLabel is string && data.timeLabel.size() >= 2 && data.timeLabel.size() <= 30 &&
+             data.location is string && data.location.size() >= 2 && data.location.size() <= 60 &&
+             data.description is string && data.description.size() >= 2 && data.description.size() <= 240 &&
+             data.isCurrent is bool &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidVotingCycle(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.status is string && data.status in ['NOMINATIONS', 'OPEN', 'CLOSED', 'EVICTED', 'CANCELLED'] &&
+             data.nominatedUids is list &&
+             data.nominatedUids.size() <= 15 &&
+             (
+               (data.status in ['NOMINATIONS', 'CANCELLED'] && data.nominatedUids.size() >= 0) ||
+               (data.status in ['OPEN', 'CLOSED', 'EVICTED'] && data.nominatedUids.size() >= 1)
+             ) &&
+             data.nomineeSummaries is list && data.nomineeSummaries.size() == data.nominatedUids.size() &&
+             data.npcVotesEnabled is bool &&
+             (!('evictedUid' in data) || data.evictedUid == null || (data.evictedUid is string && data.evictedUid.size() <= 128)) &&
+             (!('evictedDisplayName' in data) || data.evictedDisplayName == null || (data.evictedDisplayName is string && data.evictedDisplayName.size() <= 40)) &&
+             (!('voteType' in data) || data.voteType is string && data.voteType in ['EVICT', 'SAVE']) &&
+             (!('nominationsPerPlayer' in data) || (data.nominationsPerPlayer is int && data.nominationsPerPlayer >= 1 && data.nominationsPerPlayer <= 3)) &&
+             (!('nominationEndTimeMillis' in data) || (data.nominationEndTimeMillis is int && data.nominationEndTimeMillis >= 0)) &&
+             (!('votingDurationMinutes' in data) || (data.votingDurationMinutes is int && data.votingDurationMinutes >= 1 && data.votingDurationMinutes <= 1440)) &&
+             (!('votingEndTimeMillis' in data) || (data.votingEndTimeMillis is int && data.votingEndTimeMillis >= 0)) &&
+             (!('resultVisibility' in data) || (data.resultVisibility is string && data.resultVisibility in ['HIDDEN_UNTIL_CLOSED', 'LIVE_TOTALS', 'ADMIN_ONLY'])) &&
+             (!('tieBreakerPolicy' in data) || (data.tieBreakerPolicy is string && data.tieBreakerPolicy in ['ADMIN_DECIDES', 'CAPTAIN_DECIDES', 'RANDOM_DRAW', 'NO_EVICTION'])) &&
+             (!('cancelledReason' in data) || data.cancelledReason == null || (data.cancelledReason is string && data.cancelledReason.size() <= 200)) &&
+             (!('serverTallyJson' in data) || data.serverTallyJson == null || (data.serverTallyJson is string && data.serverTallyJson.size() <= 2000)) &&
+             (!('serverTotalRealVotes' in data) || (data.serverTotalRealVotes is int && data.serverTotalRealVotes >= 0)) &&
+             (!('serverTotalNpcVotes' in data) || (data.serverTotalNpcVotes is int && data.serverTotalNpcVotes >= 0)) &&
+             (!('serverIsTie' in data) || data.serverIsTie is bool) &&
+             (!('serverTalliedAtMillis' in data) || (data.serverTalliedAtMillis is int && data.serverTalliedAtMillis >= 0)) &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidNominationBallot(data, seasonId, cycleId, voterId, maxTargets) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.cycleId is string && data.cycleId == cycleId &&
+             data.voterUid is string && data.voterUid == voterId &&
+             data.voterName is string && data.voterName.size() >= 2 && data.voterName.size() <= 40 &&
+             data.targetUids is list &&
+             data.targetUids.size() >= 1 &&
+             data.targetUids.size() <= maxTargets &&
+             data.targetUids.size() <= 3 &&
+             data.targetNames is list &&
+             data.targetNames.size() == data.targetUids.size() &&
+             !(voterId in data.targetUids) &&
+             data.targetUids[0] is string && data.targetUids[0].size() >= 1 &&
+             !exists(/databases/$(database)/documents/admins/$(data.targetUids[0])) &&
+             (data.targetUids.size() < 2 || (data.targetUids[1] is string && data.targetUids[1] != data.targetUids[0] && !exists(/databases/$(database)/documents/admins/$(data.targetUids[1])))) &&
+             (data.targetUids.size() < 3 || (data.targetUids[2] is string && data.targetUids[2] != data.targetUids[0] && data.targetUids[2] != data.targetUids[1] && !exists(/databases/$(database)/documents/admins/$(data.targetUids[2])))) &&
+             (!('reason' in data) || data.reason == null || (data.reason is string && data.reason.size() <= 200)) &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidVotingBallot(data, seasonId, cycleId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.cycleId is string && data.cycleId == cycleId &&
+             data.voterUid is string && data.voterUid.size() >= 1 && data.voterUid.size() <= 128 &&
+             (!('voterName' in data) || data.voterName == null || (data.voterName is string && data.voterName.size() <= 40)) &&
+             data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128 &&
+             data.sourceType is string && data.sourceType in ['REAL_PLAYER', 'NPC'] &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidEvictionRecord(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.cycleId is string && isValidId(data.cycleId) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.playerId is string && data.playerId.size() >= 4 && data.playerId.size() <= 20 &&
+             data.displayName is string && data.displayName.size() >= 3 && data.displayName.size() <= 24 &&
+             isValidCharacterId(data.characterId) &&
+             data.realVotes is int && data.realVotes >= 0 &&
+             data.npcVotes is int && data.npcVotes >= 0 &&
+             data.announcementText is string && data.announcementText.size() >= 3 && data.announcementText.size() <= 300 &&
+             data.evictedBy is string && data.evictedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidAnnouncement(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.message is string && data.message.size() >= 2 && data.message.size() <= 320 &&
+             (!('presetId' in data) || data.presetId == null || (data.presetId is string && data.presetId.size() <= 64)) &&
+             data.languageTag is string && data.languageTag in ['hi-IN', 'en-IN'] &&
+             data.voiceGender is string && data.voiceGender in ['FEMALE', 'MALE'] &&
+             data.issuedBy is string && data.issuedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidRationItem(data, seasonId, itemId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.itemId is string && data.itemId == itemId &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 40 &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 30 &&
+             data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 20 &&
+             data.quantity is int && data.quantity >= 0 && data.quantity <= 200 &&
+             data.maxQuantity is int && data.maxQuantity >= 1 && data.maxQuantity <= 200 &&
+             data.quantity <= data.maxQuantity &&
+             data.minThreshold is int && data.minThreshold >= 0 && data.minThreshold <= data.maxQuantity &&
+             data.permitted is bool &&
+             data.energyValue is int && data.energyValue >= 1 && data.energyValue <= 60 &&
+             data.lastUpdatedBy is string && data.lastUpdatedBy.size() >= 1 && data.lastUpdatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidKitchenPlayerState(data, seasonId, userId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 24 &&
+             data.energy is int && data.energy >= 0 && data.energy <= 100 &&
+             data.hunger is int && data.hunger >= 0 && data.hunger <= 100 &&
+             data.bagItems is map && data.bagItems.size() <= 20 &&
+             (!('activeCookingId' in data) || data.activeCookingId == null || (data.activeCookingId is string && data.activeCookingId.size() <= 128)) &&
+             data.lastCollectedAtMillis is int && data.lastCollectedAtMillis >= 0 &&
+             data.lastCookedAtMillis is int && data.lastCookedAtMillis >= 0 &&
+             data.lastEatAtMillis is int && data.lastEatAtMillis >= 0 &&
+             data.mealsCookedCount is int && data.mealsCookedCount >= 0 && data.mealsCookedCount <= 10000 &&
+             data.mealsEatenCount is int && data.mealsEatenCount >= 0 && data.mealsEatenCount <= 10000 &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCookingSession(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.stationId is string && data.stationId.size() >= 2 && data.stationId.size() <= 40 &&
+             data.recipeId is string && data.recipeId.size() >= 2 && data.recipeId.size() <= 64 &&
+             data.recipeName is string && data.recipeName.size() >= 2 && data.recipeName.size() <= 80 &&
+             data.chefUid is string && data.chefUid.size() >= 1 && data.chefUid.size() <= 128 &&
+             data.chefDisplayName is string && data.chefDisplayName.size() >= 2 && data.chefDisplayName.size() <= 24 &&
+             data.status is string && data.status in ['COOKING', 'READY', 'CLAIMED', 'CANCELLED'] &&
+             data.ingredientsUsed is map && data.ingredientsUsed.size() >= 1 && data.ingredientsUsed.size() <= 12 &&
+             data.startedAtMillis is int && data.startedAtMillis > 0 &&
+             data.readyAtMillis is int && data.readyAtMillis >= data.startedAtMillis &&
+             data.energyRestore is int && data.energyRestore >= 5 && data.energyRestore <= 80 &&
+             data.servingsTotal is int && data.servingsTotal >= 1 && data.servingsTotal <= 6 &&
+             data.servingsRemaining is int && data.servingsRemaining >= 0 && data.servingsRemaining <= data.servingsTotal &&
+             data.claimedByUids is list && data.claimedByUids.size() <= 6 &&
+             (data.claimedByUids.size() == 0 || data.claimedByUids[0] is string) &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidTaskPlayerProgress(data, seasonId, taskId, userId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.taskId is string && data.taskId == taskId &&
+             data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 24 &&
+             data.completedSteps is list && data.completedSteps.size() <= 12 &&
+             (data.completedSteps.size() == 0 || data.completedSteps[0] is string) &&
+             data.percent is int && data.percent >= 0 && data.percent <= 100 &&
+             data.status is string && data.status in ['ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'EXPIRED'] &&
+             data.elapsedSeconds is int && data.elapsedSeconds >= 0 && data.elapsedSeconds <= 7200 &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPlayerLeaderboardEntry(data, seasonId, userId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.userId is string && data.userId == userId &&
+             data.playerId is string && data.playerId.size() >= 4 && data.playerId.size() <= 20 &&
+             data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 24 &&
+             isValidCharacterId(data.characterId) &&
+             (!('teamId' in data) || data.teamId == null || (data.teamId is string && data.teamId.size() <= 128)) &&
+             data.points is int && data.points >= 0 && data.points <= 1000000 &&
+             data.housePointsContribution is int && data.housePointsContribution >= 0 && data.housePointsContribution <= 1000000 &&
+             data.tasksCompleted is int && data.tasksCompleted >= 0 && data.tasksCompleted <= 10000 &&
+             data.mealsCooked is int && data.mealsCooked >= 0 && data.mealsCooked <= 10000 &&
+             data.achievements is list && data.achievements.size() <= 24 &&
+             (data.achievements.size() == 0 || data.achievements[0] is string) &&
+             data.lastGrantId is string && data.lastGrantId.size() >= 1 && data.lastGrantId.size() <= 128 &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidRewardGrant(data, seasonId, grantId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.grantId is string && data.grantId == grantId &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.sourceType is string && data.sourceType in ['TASK', 'COOKING', 'ADMIN'] &&
+             data.sourceId is string && data.sourceId.size() >= 1 && data.sourceId.size() <= 128 &&
+             data.awardedPoints is int && data.awardedPoints >= 1 && data.awardedPoints <= 1000 &&
+             (!('achievementId' in data) || data.achievementId == null || (data.achievementId is string && data.achievementId.size() <= 80)) &&
+             data.grantedBy is string && data.grantedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidAiConfig(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.enabled is bool &&
+             data.mode is string && data.mode in ['MANUAL', 'ASSIST', 'AUTO'] &&
+             data.emergencyStopped is bool &&
+             data.apiProvider is string && data.apiProvider in ['RULE_ENGINE_NO_API_KEY', 'OPENAI_ENV_KEY'] &&
+             data.autoHindiAnnouncements is bool &&
+             data.autoKitchenMonitor is bool &&
+             data.autoTaskCoordinator is bool &&
+             data.autoTimerMonitor is bool &&
+             data.tickIntervalMinutes is int && data.tickIntervalMinutes >= 1 && data.tickIntervalMinutes <= 120 &&
+             data.lastTickAtMillis is int && data.lastTickAtMillis >= 0 &&
+             data.lastAdminSeenAtMillis is int && data.lastAdminSeenAtMillis >= 0 &&
+             data.unseenOfflineCount is int && data.unseenOfflineCount >= 0 && data.unseenOfflineCount <= 10000 &&
+             data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAiSchedule(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.actionType is string && data.actionType in ['HINDI_ANNOUNCEMENT', 'DAILY_TASK', 'KITCHEN_CHECK', 'TIMER_CHECK', 'HOUSE_ACTIVITY'] &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 100 &&
+             data.messageOrPayload is string && data.messageOrPayload.size() >= 2 && data.messageOrPayload.size() <= 600 &&
+             data.targetTimeMillis is int && data.targetTimeMillis > 0 &&
+             data.recurrenceMinutes is int && data.recurrenceMinutes >= 0 && data.recurrenceMinutes <= 1440 &&
+             data.status is string && data.status in ['PENDING', 'EXECUTED', 'PROPOSED', 'CANCELLED', 'PAUSED'] &&
+             data.modeOverride is string && data.modeOverride in ['INHERIT', 'MANUAL', 'ASSIST', 'AUTO'] &&
+             data.executionKey is string && data.executionKey.size() >= 3 && data.executionKey.size() <= 160 &&
+             data.lastExecutedAtMillis is int && data.lastExecutedAtMillis >= 0 &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAiProposal(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 40 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 100 &&
+             data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 400 &&
+             (!('hindiAnnouncement' in data) || data.hindiAnnouncement == null || (data.hindiAnnouncement is string && data.hindiAnnouncement.size() <= 320)) &&
+             (!('payloadJson' in data) || data.payloadJson == null || (data.payloadJson is string && data.payloadJson.size() <= 1000)) &&
+             data.status is string && data.status in ['PENDING', 'APPROVED', 'REJECTED', 'EXECUTED', 'CANCELLED'] &&
+             data.executionKey is string && data.executionKey.size() >= 3 && data.executionKey.size() <= 160 &&
+             (!('reviewedBy' in data) || data.reviewedBy == null || (data.reviewedBy is string && data.reviewedBy.size() <= 128)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAiLog(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 40 &&
+             data.mode is string && data.mode in ['MANUAL', 'ASSIST', 'AUTO', 'OFF'] &&
+             data.source is string && data.source in ['CLOUD_SCHEDULER', 'ADMIN_TICK', 'OFFLINE_CATCHUP', 'EMERGENCY_STOP', 'APPROVAL', 'UI_CONTROL'] &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 100 &&
+             data.detail is string && data.detail.size() >= 2 && data.detail.size() <= 500 &&
+             (!('hindiAnnouncement' in data) || data.hindiAnnouncement == null || (data.hindiAnnouncement is string && data.hindiAnnouncement.size() <= 320)) &&
+             data.executionKey is string && data.executionKey.size() >= 3 && data.executionKey.size() <= 160 &&
+             data.executedAtMillis is int && data.executedAtMillis > 0 &&
+             data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.acknowledgedByAdmin is bool &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidVipPrivilege(data, seasonId, userId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.userId is string && data.userId == userId &&
+             data.playerId is string && data.playerId.size() <= 24 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40 &&
+             data.vipEnabled is bool &&
+             data.vipRoomAccess is bool &&
+             data.vipLabel is string && data.vipLabel.size() >= 1 && data.vipLabel.size() <= 40 &&
+             data.updatedBy is string && data.updatedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPrivilegeHistory(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128 &&
+             data.targetDisplayName is string && data.targetDisplayName.size() >= 1 && data.targetDisplayName.size() <= 40 &&
+             data.actionType is string && data.actionType in ['CAPTAIN_ASSIGNED', 'CAPTAIN_REMOVED', 'CAPTAIN_POWER_UPDATED', 'VIP_GRANTED', 'VIP_REVOKED'] &&
+             data.detail is string && data.detail.size() >= 2 && data.detail.size() <= 300 &&
+             data.issuedBy is string && data.issuedBy == request.auth.uid &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidGameSettings(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             (!('seasonTitle' in data) || (data.seasonTitle is string && data.seasonTitle.size() >= 3 && data.seasonTitle.size() <= 60)) &&
+             (!('allowNpcFillers' in data) || data.allowNpcFillers is bool) &&
+             (!('defaultCaptainVipAccess' in data) || data.defaultCaptainVipAccess is bool) &&
+             (!('votingDurationMinutes' in data) || (data.votingDurationMinutes is int && data.votingDurationMinutes >= 1 && data.votingDurationMinutes <= 1440)) &&
+             (!('rationDailyCap' in data) || (data.rationDailyCap is int && data.rationDailyCap >= 1 && data.rationDailyCap <= 100)) &&
+             data.updatedBy is string && data.updatedBy == request.auth.uid &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAdminAuditLog(data, seasonId) {
+      return data.seasonId is string && data.seasonId == seasonId &&
+             data.actionType is string && data.actionType.size() >= 2 && data.actionType.size() <= 40 &&
+             data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 300 &&
+             data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    // 1. /users/{userId} — PII-isolated private accounts (owner or trusted admin only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isOwner(userId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().role == 'PLAYER' &&
+                       (!('banned' in incoming()) || incoming().banned == false) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'normalizedName', 'playerId', 'characterId', 'role', 'seasonId', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'email', 'username', 'displayName', 'normalizedName', 'playerId', 'characterId', 'role', 'seasonId', 'banned', 'banReason', 'evictedSeasons', 'createdAt', 'updatedAt']) &&
+                       isValidUserAccount(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserAccount(incoming()) && (
+                         isAdmin() || (
+                           isOwner(userId) &&
+                           !isUserBanned(request.auth.uid) &&
+                           incoming().userId == existing().userId &&
+                           incoming().role == existing().role &&
+                           incoming().playerId == existing().playerId &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'normalizedName', 'characterId', 'seasonId', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+    }
+
+    // 2. /admins/{uid} — Backend-only trusted Admin grants
+    match /admins/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    // 3. /displayNames/{normalizedName} — Unique Display Name reservations
+    match /displayNames/{normalizedName} {
+      allow get: if isSignedIn() && isValidId(normalizedName);
+      allow list, update: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidId(normalizedName) &&
+                       !exists(/databases/$(database)/documents/displayNames/$(normalizedName)) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'createdAt']) &&
+                       isValidDisplayNameClaim(incoming());
+
+      allow delete: if isSignedIn() &&
+                       isValidId(normalizedName) &&
+                       (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 3b. /authCredentials/{normalized} — Salted scrypt password & recovery hashes (Admin SDK only)
+    match /authCredentials/{normalized} {
+      allow read, write: if false;
+    }
+
+    // 3c. /usernames/{normalized} — Server-only unique username registry (no enumeration)
+    match /usernames/{normalized} {
+      allow read, write: if false;
+    }
+
+    // 3d. /adminCredentials/{credId} — Server-only salted scrypt Admin password digest
+    match /adminCredentials/{credId} {
+      allow read, write: if false;
+    }
+
+    // 3e. /adminRateLimits/{limitId} — Server-only brute-force lockout counters
+    match /adminRateLimits/{limitId} {
+      allow read, write: if false;
+    }
+
+    // 3f. /adminSessions/{sessionId} — Server-only expiring Admin Control Room sessions
+    match /adminSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    // 4. /seasons/{seasonId} — Shared Reality Show Seasons (max 15 capacity)
+    match /seasons/{seasonId} {
+      allow get: if isSignedIn() && isValidId(seasonId);
+      allow list: if isSignedIn() && (existing().status in ['LOBBY', 'LIVE'] || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(seasonId) &&
+                       incoming().keys().hasAll(['title', 'status', 'maxPlayers', 'activeCount', 'dayNightMode', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['title', 'status', 'maxPlayers', 'activeCount', 'dayNightMode', 'createdAt', 'updatedAt']) &&
+                       isValidSeason(incoming()) && (
+                         isAdmin() || (
+                           seasonId == 'season_01' &&
+                           incoming().status == 'LOBBY' &&
+                           incoming().activeCount == 0
+                         )
+                       );
+
+      allow update: if isSignedIn() &&
+                       isValidId(seasonId) &&
+                       isValidSeason(incoming()) && (
+                         isAdmin() || (
+                           !isUserBanned(request.auth.uid) &&
+                           existing().status in ['LOBBY', 'LIVE'] &&
+                           incoming().title == existing().title &&
+                           incoming().maxPlayers == existing().maxPlayers &&
+                           incoming().status == existing().status &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().activeCount >= 0 &&
+                           incoming().activeCount <= 15 &&
+                           incoming().activeCount - existing().activeCount <= 1 &&
+                           existing().activeCount - incoming().activeCount <= 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['activeCount', 'dayNightMode', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isAdmin() && isValidId(seasonId);
+
+      // 4a. /seasons/{seasonId}/members/{userId} — Season Roster (strictly PLAYER-only to prevent Secret Admin leakage)
+      match /members/{userId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(userId) && (isAdmin() || existing().role != 'ADMIN');
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         isValidSeasonMember(incoming(), seasonId) &&
+                         incoming().role == 'PLAYER' &&
+                         incoming().keys().hasAll(['seasonId', 'userId', 'playerId', 'displayName', 'characterId', 'slotNumber', 'role', 'status', 'online', 'sessionId', 'joinedAt', 'lastSeenAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'userId', 'playerId', 'displayName', 'characterId', 'slotNumber', 'role', 'status', 'online', 'sessionId', 'joinedAt', 'lastSeenAt']) && (
+                           isAdmin() || (
+                             isOwner(userId) &&
+                             !isUserBanned(request.auth.uid) &&
+                             incoming().userId == request.auth.uid &&
+                             incoming().status in ['LOBBY', 'IN_HOUSE'] &&
+                             exists(/databases/$(database)/documents/seasons/$(seasonId)) &&
+                             get(/databases/$(database)/documents/seasons/$(seasonId)).data.status in ['LOBBY', 'LIVE'] &&
+                             getAfter(/databases/$(database)/documents/seasons/$(seasonId)).data.activeCount <= 15
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         isValidSeasonMember(incoming(), seasonId) &&
+                         incoming().role == 'PLAYER' && (
+                           isAdmin() || (
+                             isOwner(userId) &&
+                             !isUserBanned(request.auth.uid) &&
+                             !(existing().status in ['EVICTED', 'BANNED']) &&
+                             incoming().status in ['LOBBY', 'IN_HOUSE', 'OFFLINE'] &&
+                             incoming().userId == existing().userId &&
+                             incoming().seasonId == existing().seasonId &&
+                             incoming().playerId == existing().playerId &&
+                             incoming().slotNumber == existing().slotNumber &&
+                             incoming().role == existing().role &&
+                             incoming().joinedAt == existing().joinedAt &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'characterId', 'status', 'online', 'sessionId', 'lastSeenAt'])
+                           )
+                         );
+
+        allow delete: if isSignedIn() && isValidId(seasonId) && isValidId(userId) && (isOwner(userId) || isAdmin());
+      }
+
+      // 4a-bis. /seasons/{seasonId}/adminPresence/{userId} — Secret Admin House Session (ADMIN-only, invisible to players)
+      match /adminPresence/{userId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create, update, delete: if isAdmin() && isValidId(seasonId) && isValidId(userId);
+      }
+
+      // 4b. /seasons/{seasonId}/adminControls/{controlId} — Strictly ADMIN Only
+      match /adminControls/{controlId} {
+        allow get: if isAdmin() && isValidId(seasonId) && isValidId(controlId);
+        allow list: if isAdmin();
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(controlId) &&
+                         incoming().keys().hasAll(['seasonId', 'commandType', 'payloadSummary', 'issuedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'commandType', 'payloadSummary', 'issuedBy', 'createdAt']) &&
+                         isValidAdminControl(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(controlId) &&
+                         isValidAdminControl(incoming(), seasonId) &&
+                         incoming().createdAt == existing().createdAt;
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(controlId);
+      }
+
+      // 4c. /seasons/{seasonId}/votingCycles/{cycleId} — Admin Voting Phone & Public Ballot Cycle
+      match /votingCycles/{cycleId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(cycleId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(cycleId) &&
+                         incoming().keys().hasAll(['seasonId', 'title', 'status', 'nominatedUids', 'nomineeSummaries', 'npcVotesEnabled', 'createdBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'title', 'status', 'nominatedUids', 'nomineeSummaries', 'npcVotesEnabled', 'evictedUid', 'evictedDisplayName', 'voteType', 'nominationsPerPlayer', 'nominationEndTimeMillis', 'votingDurationMinutes', 'votingEndTimeMillis', 'resultVisibility', 'tieBreakerPolicy', 'cancelledReason', 'serverTallyJson', 'serverTotalRealVotes', 'serverTotalNpcVotes', 'serverIsTie', 'serverTalliedAtMillis', 'createdBy', 'createdAt', 'updatedAt']) &&
+                         incoming().createdBy == request.auth.uid &&
+                         isValidVotingCycle(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(cycleId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidVotingCycle(incoming(), seasonId);
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(cycleId);
+
+        // Peer Nominations — 1 duplicate-proof submission per eligible player during NOMINATIONS
+        match /nominations/{voterId} {
+          allow get: if isSignedIn() && isValidId(seasonId) && isValidId(cycleId) && isValidId(voterId);
+          allow list: if isSignedIn() && existing().seasonId == seasonId && existing().cycleId == cycleId;
+
+          allow create: if isSignedIn() &&
+                           isValidId(seasonId) &&
+                           isValidId(cycleId) &&
+                           isValidId(voterId) &&
+                           !exists(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)/nominations/$(voterId)) &&
+                           exists(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)) &&
+                           get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status == 'NOMINATIONS' &&
+                           incoming().keys().hasAll(['seasonId', 'cycleId', 'voterUid', 'voterName', 'targetUids', 'targetNames', 'createdAt']) &&
+                           incoming().keys().hasOnly(['seasonId', 'cycleId', 'voterUid', 'voterName', 'targetUids', 'targetNames', 'reason', 'createdAt']) &&
+                           isValidNominationBallot(
+                             incoming(),
+                             seasonId,
+                             cycleId,
+                             voterId,
+                             get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('nominationsPerPlayer', 1)
+                           ) && (
+                             isAdmin() || (
+                               isOwner(voterId) &&
+                               !isUserBanned(request.auth.uid) &&
+                               exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) &&
+                               get(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)).data.status in ['LOBBY', 'IN_HOUSE', 'OFFLINE']
+                             )
+                           );
+
+          allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(cycleId) && isValidId(voterId);
+        }
+
+        // Verified Votes — Real player ballots vs strictly segregated NPC ballots with visibility rules
+        match /votes/{voterId} {
+          allow get: if isSignedIn() && isValidId(seasonId) && isValidId(cycleId) && isValidId(voterId) && (
+            isAdmin() ||
+            voterId == request.auth.uid ||
+            (
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('resultVisibility', 'HIDDEN_UNTIL_CLOSED') == 'LIVE_TOTALS' &&
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status in ['OPEN', 'CLOSED', 'EVICTED']
+            ) ||
+            (
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('resultVisibility', 'HIDDEN_UNTIL_CLOSED') == 'HIDDEN_UNTIL_CLOSED' &&
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status in ['CLOSED', 'EVICTED']
+            )
+          );
+          allow list: if isSignedIn() && existing().seasonId == seasonId && existing().cycleId == cycleId && (
+            isAdmin() ||
+            existing().voterUid == request.auth.uid ||
+            (
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('resultVisibility', 'HIDDEN_UNTIL_CLOSED') == 'LIVE_TOTALS' &&
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status in ['OPEN', 'CLOSED', 'EVICTED']
+            ) ||
+            (
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('resultVisibility', 'HIDDEN_UNTIL_CLOSED') == 'HIDDEN_UNTIL_CLOSED' &&
+              get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status in ['CLOSED', 'EVICTED']
+            )
+          );
+
+          allow create: if isSignedIn() &&
+                           isValidId(seasonId) &&
+                           isValidId(cycleId) &&
+                           isValidId(voterId) &&
+                           !exists(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)/votes/$(voterId)) &&
+                           incoming().keys().hasAll(['seasonId', 'cycleId', 'voterUid', 'targetUid', 'sourceType', 'createdAt']) &&
+                           incoming().keys().hasOnly(['seasonId', 'cycleId', 'voterUid', 'voterName', 'targetUid', 'sourceType', 'createdAt']) &&
+                           isValidVotingBallot(incoming(), seasonId, cycleId) &&
+                           exists(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)) &&
+                           get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.status == 'OPEN' &&
+                           incoming().targetUid in get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.nominatedUids && (
+                             (isAdmin() && incoming().sourceType == 'NPC' && get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.npcVotesEnabled == true) ||
+                             (
+                               isOwner(voterId) &&
+                               incoming().voterUid == request.auth.uid &&
+                               incoming().sourceType == 'REAL_PLAYER' &&
+                               !isUserBanned(request.auth.uid) &&
+                               (
+                                 get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.get('votingEndTimeMillis', 0) == 0 ||
+                                 request.time.toMillis() <= get(/databases/$(database)/documents/seasons/$(seasonId)/votingCycles/$(cycleId)).data.votingEndTimeMillis + 15000
+                               ) &&
+                               exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) &&
+                               get(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)).data.status in ['LOBBY', 'IN_HOUSE', 'OFFLINE']
+                             )
+                           );
+
+          allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(cycleId) && isValidId(voterId);
+        }
+      }
+
+      // 4d. /seasons/{seasonId}/evictions/{evictionId} — Historical Eviction Archive
+      match /evictions/{evictionId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(evictionId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(evictionId) &&
+                         incoming().keys().hasAll(['seasonId', 'cycleId', 'userId', 'playerId', 'displayName', 'characterId', 'realVotes', 'npcVotes', 'announcementText', 'evictedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'cycleId', 'userId', 'playerId', 'displayName', 'characterId', 'realVotes', 'npcVotes', 'announcementText', 'evictedBy', 'createdAt']) &&
+                         isValidEvictionRecord(incoming(), seasonId);
+
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(evictionId);
+      }
+
+      // 4e. /seasons/{seasonId}/announcements/{announcementId} — Admin Broadcasts & Hindi TTS
+      match /announcements/{announcementId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(announcementId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(announcementId) &&
+                         incoming().keys().hasAll(['seasonId', 'message', 'languageTag', 'voiceGender', 'issuedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'message', 'presetId', 'languageTag', 'voiceGender', 'issuedBy', 'createdAt']) &&
+                         isValidAnnouncement(incoming(), seasonId);
+
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(announcementId);
+      }
+
+      // 4f. /seasons/{seasonId}/tasks/{taskId} — Daily, Group, Secret, Captaincy & Kitchen Tasks
+      match /tasks/{taskId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(taskId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(taskId) &&
+                         incoming().keys().hasAll(['seasonId', 'title', 'description', 'instructions', 'activityType', 'assignmentMode', 'isCaptaincy', 'status', 'targetRoom', 'durationSeconds', 'startTimeMillis', 'endTimeMillis', 'promptQuestion', 'options', 'maxPoints', 'createdBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'title', 'description', 'instructions', 'activityType', 'assignmentMode', 'category', 'difficulty', 'isCaptaincy', 'status', 'targetRoom', 'durationSeconds', 'startTimeMillis', 'endTimeMillis', 'promptQuestion', 'options', 'assignedUids', 'assignedTeamId', 'requiredCheckpoints', 'requiredRecipeId', 'progressPercent', 'rewardAchievement', 'maxPoints', 'winningUid', 'winningTeamId', 'winnerSummary', 'createdBy', 'createdAt', 'updatedAt']) &&
+                         incoming().createdBy == request.auth.uid &&
+                         isValidHouseTask(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(taskId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidHouseTask(incoming(), seasonId);
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(taskId);
+
+        // Secret expected answers readable & writable ONLY by trusted Admin
+        match /answerKey/{keyDoc} {
+          allow get, list: if isAdmin() && isValidId(seasonId) && isValidId(taskId);
+
+          allow create, update: if isAdmin() &&
+                                   isValidId(seasonId) &&
+                                   isValidId(taskId) &&
+                                   isValidId(keyDoc) &&
+                                   incoming().keys().hasAll(['seasonId', 'taskId', 'expectedAnswer', 'updatedBy', 'updatedAt']) &&
+                                   incoming().keys().hasOnly(['seasonId', 'taskId', 'expectedAnswer', 'updatedBy', 'updatedAt']) &&
+                                   isValidTaskAnswerSecret(incoming(), seasonId, taskId);
+
+          allow delete: if isAdmin() && isValidId(seasonId) && isValidId(taskId) && isValidId(keyDoc);
+        }
+
+        // Duplicate-proof 1-submission-per-UID player entries
+        match /submissions/{userId} {
+          allow get: if isSignedIn() && isValidId(seasonId) && isValidId(taskId) && isValidId(userId) && (
+            isAdmin() ||
+            isOwner(userId) ||
+            get(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)).data.status == 'COMPLETED'
+          );
+
+          allow list: if isSignedIn() && existing().seasonId == seasonId && existing().taskId == taskId && (
+            isAdmin() ||
+            existing().userId == request.auth.uid ||
+            get(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)).data.status == 'COMPLETED'
+          );
+
+          allow create: if isSignedIn() &&
+                           isValidId(seasonId) &&
+                           isValidId(taskId) &&
+                           isValidId(userId) &&
+                           !exists(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)/submissions/$(userId)) &&
+                           isOwner(userId) &&
+                           incoming().userId == request.auth.uid &&
+                           !isUserBanned(request.auth.uid) &&
+                           exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) &&
+                           !(get(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)).data.status in ['EVICTED', 'BANNED', 'REMOVED']) &&
+                           exists(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)) &&
+                           get(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)).data.status in ['ACTIVE', 'IN_PROGRESS', 'ASSIGNED'] &&
+                           incoming().verificationStatus == 'SUBMITTED' &&
+                           incoming().awardedScore == 0 &&
+                           incoming().keys().hasAll(['seasonId', 'taskId', 'userId', 'playerId', 'displayName', 'answerText', 'elapsedSeconds', 'verificationStatus', 'awardedScore', 'createdAt', 'updatedAt']) &&
+                           incoming().keys().hasOnly(['seasonId', 'taskId', 'userId', 'playerId', 'displayName', 'teamId', 'answerText', 'elapsedSeconds', 'verificationStatus', 'awardedScore', 'reviewedBy', 'createdAt', 'updatedAt']) &&
+                           isValidTaskSubmission(incoming(), seasonId, taskId);
+
+          allow update: if isAdmin() &&
+                           isValidId(seasonId) &&
+                           isValidId(taskId) &&
+                           isValidId(userId) &&
+                           incoming().createdAt == existing().createdAt &&
+                           isValidTaskSubmission(incoming(), seasonId, taskId);
+
+          allow delete: if isAdmin() && isValidId(seasonId) && isValidId(taskId) && isValidId(userId);
+        }
+
+        // Phase 8 Real-time per-player checkpoint progress
+        match /progress/{userId} {
+          allow get: if isSignedIn() && isValidId(seasonId) && isValidId(taskId) && isValidId(userId);
+          allow list: if isSignedIn() && existing().seasonId == seasonId && existing().taskId == taskId;
+
+          allow create, update: if isSignedIn() &&
+                                   isValidId(seasonId) &&
+                                   isValidId(taskId) &&
+                                   isValidId(userId) &&
+                                   isValidTaskPlayerProgress(incoming(), seasonId, taskId, userId) && (
+                                     isAdmin() || (
+                                       isOwner(userId) &&
+                                       !isUserBanned(request.auth.uid) &&
+                                       exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) &&
+                                       !(get(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)).data.status in ['EVICTED', 'BANNED', 'REMOVED']) &&
+                                       exists(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)) &&
+                                       get(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(taskId)).data.status in ['ACTIVE', 'IN_PROGRESS', 'ASSIGNED', 'AVAILABLE'] &&
+                                       incoming().keys().hasAll(['seasonId', 'taskId', 'userId', 'displayName', 'completedSteps', 'percent', 'status', 'elapsedSeconds', 'updatedAt']) &&
+                                       incoming().keys().hasOnly(['seasonId', 'taskId', 'userId', 'displayName', 'completedSteps', 'percent', 'status', 'elapsedSeconds', 'updatedAt'])
+                                     )
+                                   );
+
+          allow delete: if isAdmin() && isValidId(seasonId) && isValidId(taskId) && isValidId(userId);
+        }
+      }
+
+      // 4g. /seasons/{seasonId}/teams/{teamId} — Synchronized House Teams
+      match /teams/{teamId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(teamId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(teamId) &&
+                         incoming().keys().hasAll(['seasonId', 'name', 'colorHex', 'memberUids', 'score', 'winsCount', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'name', 'colorHex', 'memberUids', 'score', 'winsCount', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         isValidHouseTeam(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(teamId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidHouseTeam(incoming(), seasonId);
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(teamId);
+      }
+
+      // 4h. /seasons/{seasonId}/captaincyHistory/{recordId} — Captaincy Assignment & Win Log
+      match /captaincyHistory/{recordId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(recordId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(recordId) &&
+                         incoming().keys().hasAll(['seasonId', 'captainUid', 'captainPlayerId', 'captainDisplayName', 'captainCharacterId', 'title', 'scoreAwarded', 'assignedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'taskId', 'captainUid', 'captainPlayerId', 'captainDisplayName', 'captainCharacterId', 'title', 'scoreAwarded', 'assignedBy', 'createdAt']) &&
+                         isValidCaptaincyRecord(incoming(), seasonId);
+
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(recordId);
+      }
+
+      // 4i. /seasons/{seasonId}/houseRules/{ruleId} — House Rules Directory
+      match /houseRules/{ruleId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(ruleId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(ruleId) &&
+                         incoming().keys().hasAll(['seasonId', 'ruleNumber', 'title', 'description', 'severity', 'active', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'ruleNumber', 'title', 'description', 'severity', 'active', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         isValidHouseRule(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(ruleId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidHouseRule(incoming(), seasonId);
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(ruleId);
+      }
+
+      // 4j. /seasons/{seasonId}/ruleViolations/{violationId} — Official Rule Violation History
+      match /ruleViolations/{violationId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(violationId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(violationId) &&
+                         incoming().keys().hasAll(['seasonId', 'ruleId', 'ruleTitle', 'targetUid', 'targetPlayerId', 'targetDisplayName', 'warningLevel', 'note', 'issuedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'ruleId', 'ruleTitle', 'targetUid', 'targetPlayerId', 'targetDisplayName', 'warningLevel', 'note', 'issuedBy', 'createdAt']) &&
+                         isValidRuleViolation(incoming(), seasonId);
+
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(violationId);
+      }
+
+      // 4k. /seasons/{seasonId}/dailySchedule/{slotId} — Daily House Activities Routine
+      match /dailySchedule/{slotId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(slotId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(slotId) &&
+                         incoming().keys().hasAll(['seasonId', 'orderIndex', 'activityKey', 'title', 'timeLabel', 'location', 'description', 'isCurrent', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'orderIndex', 'activityKey', 'title', 'timeLabel', 'location', 'description', 'isCurrent', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         isValidDailyScheduleSlot(incoming(), seasonId);
+
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(slotId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidDailyScheduleSlot(incoming(), seasonId);
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(slotId);
+      }
+
+      // 4l. /seasons/{seasonId}/cctvRecordings/{recordingId} — Admin-Only Recorded CCTV Archive Metadata
+      match /cctvRecordings/{recordingId} {
+        allow get: if isAdmin() && isValidId(seasonId) && isValidId(recordingId);
+        allow list: if isAdmin() && existing().seasonId == seasonId;
+
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(recordingId) &&
+                         incoming().keys().hasAll(['seasonId', 'cameraId', 'cameraLabel', 'storagePath', 'downloadUrl', 'dateKey', 'startedAtMillis', 'durationMillis', 'sizeBytes', 'mimeType', 'recordedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'cameraId', 'cameraLabel', 'storagePath', 'downloadUrl', 'dateKey', 'startedAtMillis', 'durationMillis', 'sizeBytes', 'mimeType', 'recordedBy', 'createdAt']) &&
+                         isValidCctvRecording(incoming(), seasonId);
+
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(recordingId);
+      }
+
+      // 4m. /seasons/{seasonId}/kitchenRations/{itemId} — Shared House Ration Pantry
+      match /kitchenRations/{itemId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(itemId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(itemId) &&
+                         incoming().keys().hasAll(['seasonId', 'itemId', 'name', 'category', 'unit', 'quantity', 'maxQuantity', 'minThreshold', 'permitted', 'energyValue', 'lastUpdatedBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'itemId', 'name', 'category', 'unit', 'quantity', 'maxQuantity', 'minThreshold', 'permitted', 'energyValue', 'lastUpdatedBy', 'createdAt', 'updatedAt']) &&
+                         isValidRationItem(incoming(), seasonId, itemId) && (
+                           isAdmin() || (
+                             itemId in ['rice', 'bread', 'vegetables', 'fruits', 'milk', 'eggs', 'water', 'spices', 'lentils', 'butter'] &&
+                             incoming().permitted == true &&
+                             !isUserBanned(request.auth.uid) &&
+                             exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid))
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(itemId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidRationItem(incoming(), seasonId, itemId) && (
+                           isAdmin() || (
+                             !isUserBanned(request.auth.uid) &&
+                             exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) &&
+                             !(get(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)).data.status in ['EVICTED', 'BANNED', 'REMOVED']) &&
+                             existing().permitted == true &&
+                             incoming().permitted == existing().permitted &&
+                             incoming().quantity >= 0 &&
+                             incoming().quantity < existing().quantity &&
+                             existing().quantity - incoming().quantity <= 10 &&
+                             incoming().lastUpdatedBy == request.auth.uid &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['quantity', 'lastUpdatedBy', 'updatedAt'])
+                           )
+                         );
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(itemId);
+      }
+
+      // 4n. /seasons/{seasonId}/kitchenProfiles/{userId} — Player Nutrition & Cooking Cooldowns
+      match /kitchenProfiles/{userId} {
+        allow get: if isValidId(seasonId) && isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().seasonId == seasonId && (existing().userId == request.auth.uid || isAdmin());
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         isValidKitchenPlayerState(incoming(), seasonId, userId) && (
+                           isAdmin() || (
+                             isOwner(userId) &&
+                             !isUserBanned(request.auth.uid) &&
+                             incoming().keys().hasAll(['seasonId', 'userId', 'displayName', 'energy', 'hunger', 'bagItems', 'lastCollectedAtMillis', 'lastCookedAtMillis', 'lastEatAtMillis', 'mealsCookedCount', 'mealsEatenCount', 'updatedAt']) &&
+                             incoming().keys().hasOnly(['seasonId', 'userId', 'displayName', 'energy', 'hunger', 'bagItems', 'activeCookingId', 'lastCollectedAtMillis', 'lastCookedAtMillis', 'lastEatAtMillis', 'mealsCookedCount', 'mealsEatenCount', 'updatedAt'])
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         isValidKitchenPlayerState(incoming(), seasonId, userId) && (
+                           isAdmin() || (
+                             isOwner(userId) &&
+                             !isUserBanned(request.auth.uid) &&
+                             incoming().keys().hasOnly(['seasonId', 'userId', 'displayName', 'energy', 'hunger', 'bagItems', 'activeCookingId', 'lastCollectedAtMillis', 'lastCookedAtMillis', 'lastEatAtMillis', 'mealsCookedCount', 'mealsEatenCount', 'updatedAt'])
+                           )
+                         );
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(userId);
+      }
+
+      // 4o. /seasons/{seasonId}/kitchenCooking/{sessionId} — Shared Cooking Stations & Meals
+      match /kitchenCooking/{sessionId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(sessionId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(sessionId) &&
+                         incoming().keys().hasAll(['seasonId', 'stationId', 'recipeId', 'recipeName', 'chefUid', 'chefDisplayName', 'status', 'ingredientsUsed', 'startedAtMillis', 'readyAtMillis', 'energyRestore', 'servingsTotal', 'servingsRemaining', 'claimedByUids', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'stationId', 'recipeId', 'recipeName', 'chefUid', 'chefDisplayName', 'status', 'ingredientsUsed', 'startedAtMillis', 'readyAtMillis', 'energyRestore', 'servingsTotal', 'servingsRemaining', 'claimedByUids', 'updatedBy', 'createdAt', 'updatedAt']) &&
+                         isValidCookingSession(incoming(), seasonId) && (
+                           isAdmin() || (
+                             incoming().chefUid == request.auth.uid &&
+                             incoming().status == 'COOKING' &&
+                             incoming().claimedByUids.size() == 0 &&
+                             !isUserBanned(request.auth.uid) &&
+                             exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid))
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(sessionId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCookingSession(incoming(), seasonId) && (
+                           isAdmin() || (
+                             !isUserBanned(request.auth.uid) &&
+                             exists(/databases/$(database)/documents/seasons/$(seasonId)/members/$(request.auth.uid)) && (
+                               // Chef marks READY or CANCELLED
+                               (
+                                 existing().chefUid == request.auth.uid &&
+                                 existing().status == 'COOKING' &&
+                                 incoming().status in ['READY', 'CANCELLED'] &&
+                                 incoming().updatedBy == request.auth.uid &&
+                                 incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedBy', 'updatedAt'])
+                               ) ||
+                               // Any non-evicted player claims 1 serving (preventing duplicate claims per UID)
+                               (
+                                 existing().status in ['COOKING', 'READY'] &&
+                                 existing().servingsRemaining >= 1 &&
+                                 incoming().servingsRemaining == existing().servingsRemaining - 1 &&
+                                 !(request.auth.uid in existing().claimedByUids) &&
+                                 request.auth.uid in incoming().claimedByUids &&
+                                 incoming().claimedByUids.size() == existing().claimedByUids.size() + 1 &&
+                                 incoming().status in ['READY', 'CLAIMED'] &&
+                                 incoming().updatedBy == request.auth.uid &&
+                                 incoming().diff(existing()).affectedKeys().hasOnly(['servingsRemaining', 'claimedByUids', 'status', 'updatedBy', 'updatedAt'])
+                               )
+                             )
+                           )
+                         );
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(sessionId);
+      }
+
+      // 4p. /seasons/{seasonId}/leaderboard/{userId} — Housemate Points & Achievements
+      match /leaderboard/{userId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(userId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         incoming().keys().hasAll(['seasonId', 'userId', 'playerId', 'displayName', 'characterId', 'points', 'housePointsContribution', 'tasksCompleted', 'mealsCooked', 'achievements', 'lastGrantId', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'userId', 'playerId', 'displayName', 'characterId', 'teamId', 'points', 'housePointsContribution', 'tasksCompleted', 'mealsCooked', 'achievements', 'lastGrantId', 'updatedAt']) &&
+                         isValidPlayerLeaderboardEntry(incoming(), seasonId, userId) && (
+                           isAdmin() || (
+                             isOwner(userId) &&
+                             incoming().points == 0 &&
+                             incoming().housePointsContribution == 0 &&
+                             incoming().tasksCompleted == 0 &&
+                             incoming().mealsCooked == 0 &&
+                             incoming().achievements.size() == 0 &&
+                             incoming().lastGrantId == 'init'
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(userId) &&
+                         isValidPlayerLeaderboardEntry(incoming(), seasonId, userId) && (
+                           isAdmin() || (
+                             isOwner(userId) && (
+                               (
+                                 incoming().lastGrantId != existing().lastGrantId &&
+                                 !exists(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(incoming().lastGrantId)) &&
+                                 existsAfter(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(incoming().lastGrantId)) &&
+                                 getAfter(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(incoming().lastGrantId)).data.userId == userId &&
+                                 incoming().points == existing().points + getAfter(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(incoming().lastGrantId)).data.awardedPoints &&
+                                 incoming().housePointsContribution == existing().housePointsContribution + getAfter(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(incoming().lastGrantId)).data.awardedPoints
+                               ) || (
+                                 incoming().points == existing().points &&
+                                 incoming().housePointsContribution == existing().housePointsContribution &&
+                                 incoming().tasksCompleted == existing().tasksCompleted &&
+                                 incoming().mealsCooked == existing().mealsCooked &&
+                                 incoming().achievements == existing().achievements &&
+                                 incoming().lastGrantId == existing().lastGrantId &&
+                                 incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'characterId', 'teamId', 'updatedAt'])
+                               )
+                             )
+                           )
+                         );
+
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(userId);
+      }
+
+      // 4q. /seasons/{seasonId}/rewardGrants/{grantId} — Idempotent One-Time Reward Ledger
+      match /rewardGrants/{grantId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(grantId) && (isAdmin() || existing().userId == request.auth.uid);
+        allow list: if isSignedIn() && existing().seasonId == seasonId && (isAdmin() || existing().userId == request.auth.uid);
+
+        allow create: if isSignedIn() &&
+                         isValidId(seasonId) &&
+                         isValidId(grantId) &&
+                         !exists(/databases/$(database)/documents/seasons/$(seasonId)/rewardGrants/$(grantId)) &&
+                         incoming().keys().hasAll(['seasonId', 'grantId', 'userId', 'sourceType', 'sourceId', 'awardedPoints', 'grantedBy', 'createdAt']) &&
+                         incoming().keys().hasOnly(['seasonId', 'grantId', 'userId', 'sourceType', 'sourceId', 'awardedPoints', 'achievementId', 'grantedBy', 'createdAt']) &&
+                         isValidRewardGrant(incoming(), seasonId, grantId) && (
+                           isAdmin() || (
+                             isOwner(incoming().userId) && (
+                               (
+                                 incoming().sourceType == 'TASK' &&
+                                 grantId == 'TASK_' + incoming().sourceId + '_' + request.auth.uid &&
+                                 exists(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(incoming().sourceId)) &&
+                                 existsAfter(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(incoming().sourceId)/submissions/$(request.auth.uid)) &&
+                                 incoming().awardedPoints <= get(/databases/$(database)/documents/seasons/$(seasonId)/tasks/$(incoming().sourceId)).data.maxPoints
+                               ) || (
+                                 incoming().sourceType == 'COOKING' &&
+                                 grantId == 'COOK_' + incoming().sourceId + '_' + request.auth.uid &&
+                                 exists(/databases/$(database)/documents/seasons/$(seasonId)/kitchenCooking/$(incoming().sourceId)) &&
+                                 get(/databases/$(database)/documents/seasons/$(seasonId)/kitchenCooking/$(incoming().sourceId)).data.chefUid == request.auth.uid &&
+                                 incoming().awardedPoints <= 35
+                               )
+                             )
+                           )
+                         );
+
+        allow update, delete: if false;
+      }
+
+      // 4r. /seasons/{seasonId}/aiConfig/{configId} — Strictly Admin-Only AI House Manager Config
+      match /aiConfig/{configId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(configId) &&
+                         isValidAiConfig(incoming(), seasonId);
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(configId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidAiConfig(incoming(), seasonId);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(configId);
+      }
+
+      // 4s. /seasons/{seasonId}/aiSchedules/{scheduleId} — Strictly Admin-Only Offline AI Schedules
+      match /aiSchedules/{scheduleId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(scheduleId) &&
+                         isValidAiSchedule(incoming(), seasonId);
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(scheduleId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidAiSchedule(incoming(), seasonId);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(scheduleId);
+      }
+
+      // 4t. /seasons/{seasonId}/aiProposals/{proposalId} — Strictly Admin-Only ASSIST-mode Approval Queue
+      match /aiProposals/{proposalId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(proposalId) &&
+                         !exists(/databases/$(database)/documents/seasons/$(seasonId)/aiProposals/$(proposalId)) &&
+                         isValidAiProposal(incoming(), seasonId);
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(proposalId) &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidAiProposal(incoming(), seasonId);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(proposalId);
+      }
+
+      // 4u. /seasons/{seasonId}/aiLogs/{logId} — Strictly Admin-Only Idempotent AI Execution Ledger
+      match /aiLogs/{logId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(logId) &&
+                         !exists(/databases/$(database)/documents/seasons/$(seasonId)/aiLogs/$(logId)) &&
+                         isValidAiLog(incoming(), seasonId);
+        allow update: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(logId) &&
+                         incoming().executionKey == existing().executionKey &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['acknowledgedByAdmin']);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(logId);
+      }
+
+      // 4v. /seasons/{seasonId}/vipPrivileges/{userId} — Separate VIP privileges managed by Admin
+      match /vipPrivileges/{userId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(userId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+        allow create, update: if isAdmin() &&
+                                 isValidId(seasonId) &&
+                                 isValidId(userId) &&
+                                 isValidVipPrivilege(incoming(), seasonId, userId);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(userId);
+      }
+
+      // 4w. /seasons/{seasonId}/privilegeHistory/{recordId} — Captain & VIP privilege ledger
+      match /privilegeHistory/{recordId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(recordId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(recordId) &&
+                         isValidPrivilegeHistory(incoming(), seasonId);
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(recordId);
+      }
+
+      // 4x. /seasons/{seasonId}/gameSettings/{settingId} — Admin-configured game rules & settings
+      match /gameSettings/{settingId} {
+        allow get: if isSignedIn() && isValidId(seasonId) && isValidId(settingId);
+        allow list: if isSignedIn() && existing().seasonId == seasonId;
+        allow create, update: if isAdmin() &&
+                                 isValidId(seasonId) &&
+                                 isValidId(settingId) &&
+                                 isValidGameSettings(incoming(), seasonId);
+        allow delete: if isAdmin() && isValidId(seasonId) && isValidId(settingId);
+      }
+
+      // 4y. /seasons/{seasonId}/adminAuditLogs/{logId} — Strictly Admin-only security & action audit log
+      match /adminAuditLogs/{logId} {
+        allow get, list: if isAdmin() && isValidId(seasonId);
+        allow create: if isAdmin() &&
+                         isValidId(seasonId) &&
+                         isValidId(logId) &&
+                         isValidAdminAuditLog(incoming(), seasonId);
+        allow update, delete: if isAdmin() && isValidId(seasonId) && isValidId(logId);
+      }
+    }
+  }
+}

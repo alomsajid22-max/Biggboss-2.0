@@ -1,0 +1,6 @@
+{
+  "name": "BIGG BOSS – THE HOUSE",
+  "description": "BIGG BOSS – THE HOUSE 3D indoor reality-show multiplayer game built with Three.js and Jetpack Compose.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

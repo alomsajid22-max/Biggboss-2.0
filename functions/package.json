@@ -1,0 +1,13 @@
+{
+  "name": "glass-house-multiplayer-functions",
+  "version": "1.0.0",
+  "description": "Trusted Firebase Cloud Functions for Glass House 15-player capacity, unique display name reservation, and server-verified Admin RBAC.",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  }
+}

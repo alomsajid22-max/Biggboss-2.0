@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">BIGG BOSS – THE HOUSE</string>
+    <string name="error_title">3D Renderer Interrupted</string>
+    <string name="error_fallback_body">Unable to start WebGL scene on this device.</string>
+    <string name="action_retry">Reload House</string>
+    <string name="auth_brand_eyebrow">BIGG BOSS – THE HOUSE • MULTIPLAYER</string>
+    <string name="auth_hero_title">BIGG BOSS – THE HOUSE</string>
+    <string name="auth_hero_subtitle">Sign in with your Email &amp; Password to reserve your unique housemate display name and sync live across the 15-player luxury mansion.</string>
+    <string name="auth_google_cta">Continue with Google (Optional)</string>
+    <string name="auth_google_config_note">Secured by Firebase Authentication &amp; Firestore Security Rules. All new accounts start with the PLAYER role.</string>
+    <string name="reg_title">Create Housemate Profile</string>
+    <string name="reg_subtitle">Choose your unique housemate name and 3D character. Your persistent Player ID is locked to your account.</string>
+    <string name="reg_display_name_label">Unique Display Name (3–24 chars)</string>
+    <string name="reg_save_profile">Save Profile &amp; Enter Lobby</string>
+    <string name="lobby_join_house">Join House</string>
+    <string name="lobby_leave_house">Leave House</string>
+    <string name="lobby_logout">Sign Out</string>
+</resources>
+

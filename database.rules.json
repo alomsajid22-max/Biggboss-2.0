@@ -1,0 +1,125 @@
+{
+  "rules": {
+    "admins": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+    "seasons": {
+      "$seasonId": {
+        "players": {
+          ".read": "auth != null",
+          "$uid": {
+            ".write": "auth != null && !root.child('admins/' + $uid).exists() && ((auth.uid === $uid && !root.child('seasons/' + $seasonId + '/kicks/' + auth.uid).exists() && (data.exists() || root.child('seasons/' + $seasonId + '/players').numChildren() < 15)) || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'playerId', 'displayName', 'characterId', 'x', 'y', 'z', 'rotY', 'state', 'online', 'sessionId', 'updatedAt']) && newData.child('uid').val() === $uid && newData.child('x').isNumber() && newData.child('x').val() >= -28 && newData.child('x').val() <= 28 && newData.child('y').isNumber() && newData.child('y').val() >= -2 && newData.child('y').val() <= 5 && newData.child('z').isNumber() && newData.child('z').val() >= -26 && newData.child('z').val() <= 26 && newData.child('rotY').isNumber() && newData.child('state').isString() && newData.child('state').val().matches(/^(idle|walk|run|sit|bed_sit|sleep|swim|swim_idle|dance|cook|eat|sit_eat|wash|offline)$/) && (!newData.child('expression').exists() || (newData.child('expression').isString() && newData.child('expression').val().matches(/^(neutral|happy|angry|sad|surprised)$/))) && newData.child('online').isBoolean() && newData.child('sessionId').isString() && newData.child('displayName').isString() && newData.child('displayName').val().length >= 3 && newData.child('displayName').val().length <= 24)"
+          }
+        },
+        "adminPresence": {
+          ".read": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          "$uid": {
+            ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'x', 'y', 'z', 'rotY', 'state', 'online', 'sessionId', 'updatedAt']) && newData.child('uid').val() === $uid)"
+          }
+        },
+        "aiStateLive": {
+          ".read": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "votingStateLive": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "sessionLocks": {
+          "$uid": {
+            ".read": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".write": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['sessionId', 'updatedAt']) && newData.child('sessionId').isString())"
+          }
+        },
+        "kicks": {
+          "$uid": {
+            ".read": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".write": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['reason', 'issuedBy', 'updatedAt']) && newData.child('reason').isString())"
+          }
+        },
+        "worldState": {
+          "doors": {
+            ".read": "auth != null",
+            "$doorId": {
+              ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true || ($doorId !== 'door_admin' && ($doorId !== 'door_captain' || root.child('seasons/' + $seasonId + '/vipPlayers/' + auth.uid).exists() || ((root.child('seasons/' + $seasonId + '/captain/uid').val() === auth.uid || root.child('seasons/' + $seasonId + '/captain/captainUid').val() === auth.uid) && root.child('seasons/' + $seasonId + '/captain/vipAccess').val() !== false))))",
+              ".validate": "newData.hasChildren(['isOpen', 'updatedBy', 'updatedAt']) && newData.child('isOpen').isBoolean()"
+            }
+          },
+          "seats": {
+            ".read": "auth != null",
+            "$seatId": {
+              ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true || ((!($seatId.beginsWith('admin_')) && (!($seatId === 'captain_bed' || $seatId === 'captain_chair') || root.child('seasons/' + $seasonId + '/vipPlayers/' + auth.uid).exists() || ((root.child('seasons/' + $seasonId + '/captain/uid').val() === auth.uid || root.child('seasons/' + $seasonId + '/captain/captainUid').val() === auth.uid) && root.child('seasons/' + $seasonId + '/captain/vipAccess').val() !== false))) && (!data.exists() || data.child('occupiedByUid').val() === null || data.child('occupiedByUid').val() === auth.uid || !newData.exists())))",
+              ".validate": "!newData.exists() || (newData.hasChildren(['occupiedByUid', 'occupiedByName', 'updatedAt']) && (newData.child('occupiedByUid').val() === auth.uid || newData.child('occupiedByUid').val() === null))"
+            }
+          },
+          "lighting": {
+            ".read": "auth != null",
+            ".write": "auth != null"
+          }
+        },
+        "kitchenLive": {
+          ".read": "auth != null",
+          "$stationId": {
+            ".write": "auth != null",
+            ".validate": "!newData.exists() || (newData.hasChildren(['stationId', 'status', 'updatedAt']) && newData.child('status').isString())"
+          }
+        },
+        "taskProgressLive": {
+          ".read": "auth != null",
+          "$uid": {
+            ".write": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['taskId', 'percent', 'updatedAt']) && newData.child('percent').isNumber())"
+          }
+        },
+        "announcements": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "cctvState": {
+          ".read": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "adminCommands": {
+          ".read": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "activeTask": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          ".validate": "!newData.exists() || (newData.hasChildren(['taskId', 'title', 'status', 'activityType', 'startTimeMillis', 'endTimeMillis', 'updatedAt']) && newData.child('taskId').isString() && newData.child('status').isString() && newData.child('startTimeMillis').isNumber() && newData.child('endTimeMillis').isNumber())"
+        },
+        "teams": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "captain": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+          ".validate": "!newData.exists() || ((newData.hasChildren(['uid', 'displayName', 'playerId', 'title', 'updatedAt']) && newData.child('uid').isString()) || (newData.hasChildren(['captainUid', 'displayName', 'playerId', 'title', 'updatedAt']) && newData.child('captainUid').isString()))"
+        },
+        "vipPlayers": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "dailySchedule": {
+          ".read": "auth != null",
+          ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)"
+        },
+        "ruleWarnings": {
+          "$uid": {
+            ".read": "auth != null && (auth.uid === $uid || root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".write": "auth != null && (root.child('admins/' + auth.uid).exists() || auth.token.admin === true)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['ruleTitle', 'warningLevel', 'note', 'issuedBy', 'updatedAt']) && newData.child('note').isString())"
+          }
+        }
+      }
+    }
+  }
+}
